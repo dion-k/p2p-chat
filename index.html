@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LAN Secure Chat</title>
+    <meta name="theme-color" content="#166a55" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="LAN Chat" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./icons/icon.svg" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="panel connection-panel" aria-labelledby="connection-title">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">LC</div>
+          <div>
+            <h1>LAN Secure Chat</h1>
+            <p>Verschlüsselt im Browser</p>
+          </div>
+        </div>
+
+        <div class="notice" id="secure-context-warning" hidden>
+          Diese Seite braucht einen sicheren Browser-Kontext. Nutze localhost oder HTTPS.
+        </div>
+
+        <label class="field">
+          <span>Dein Name</span>
+          <input id="display-name" autocomplete="nickname" maxlength="42" />
+        </label>
+
+        <div class="connection-state">
+          <span id="connection-dot" class="dot idle"></span>
+          <div>
+            <strong id="connection-label">Nicht verbunden</strong>
+            <p id="connection-detail">Erstelle eine Einladung oder füge eine Einladung ein.</p>
+          </div>
+        </div>
+
+        <button id="open-wizard" class="primary big-action">Verbinden</button>
+        <button id="install-app" class="ghost full" hidden>Als Webapp installieren</button>
+        <button id="reset-session" class="ghost full">Trennen</button>
+
+        <div class="chat-list">
+          <div class="list-title">
+            <span>Chats</span>
+            <button id="new-chat" class="mini-button icon-mini" type="button" aria-label="Neuer Chat">+</button>
+          </div>
+          <div id="chat-list"></div>
+        </div>
+
+        <details class="advanced-box">
+          <summary>Erweitert</summary>
+          <div class="identity-card">
+            <span>Dein Fingerprint</span>
+            <strong id="local-fingerprint">wird erstellt...</strong>
+          </div>
+
+          <button id="create-offer" class="ghost full">Manuell: Einladung erstellen</button>
+
+          <label class="field">
+            <span>Ausgehender Code</span>
+            <textarea id="local-signal" readonly spellcheck="false" rows="7"></textarea>
+          </label>
+
+          <div class="button-row">
+            <button id="copy-local" class="ghost">Kopieren</button>
+            <button id="clear-local" class="ghost">Leeren</button>
+          </div>
+
+          <label class="field">
+            <span>Code der anderen Person</span>
+            <textarea id="remote-signal" spellcheck="false" rows="7" placeholder="Offer oder Answer hier einfügen"></textarea>
+          </label>
+
+          <button id="accept-signal" class="primary full">Code verarbeiten</button>
+        </details>
+      </section>
+
+      <section class="chat-panel" aria-labelledby="chat-title">
+        <header class="chat-header">
+          <div>
+            <h2 id="chat-title">Verschlüsselter Chat</h2>
+            <p id="peer-summary">Noch kein Peer verbunden</p>
+          </div>
+          <div class="pill" id="security-pill">Nicht verifiziert</div>
+        </header>
+
+        <div id="messages" class="messages" aria-live="polite"></div>
+
+        <form id="message-form" class="composer">
+          <label class="file-button" for="file-input">Datei</label>
+          <input id="file-input" type="file" hidden />
+          <input id="message-input" placeholder="Nachricht schreiben..." autocomplete="off" disabled />
+          <button id="send-message" class="primary" disabled>Senden</button>
+        </form>
+      </section>
+
+      <aside class="panel security-panel" aria-labelledby="security-title">
+        <h2 id="security-title">Sitzung</h2>
+
+        <div class="security-block">
+          <span>Sicherheitscode</span>
+          <strong id="sas-code" class="sas">------</strong>
+          <p>Vergleicht diesen Code über einen zweiten Kanal. Erst danach wird der Chat freigeschaltet.</p>
+          <button id="confirm-sas" class="primary full" disabled>Code stimmt überein</button>
+        </div>
+
+        <details class="security-block">
+          <summary>Details</summary>
+          <span>Remote Fingerprint</span>
+          <strong id="remote-fingerprint">unbekannt</strong>
+          <span>Session Key ID</span>
+          <strong id="session-key-id">keine aktive Session</strong>
+          <span>Protokoll</span>
+          <ul class="checks">
+            <li id="check-identity">Warte auf Peer-Identity</li>
+            <li id="check-signature">Warte auf signierten Handshake</li>
+            <li id="check-session">Warte auf Session-Key</li>
+            <li id="check-verified">Warte auf SAS-Bestätigung</li>
+          </ul>
+        </details>
+
+        <div class="security-block">
+          <span>Dateitransfer</span>
+          <div id="transfers" class="transfers">
+            <p>Keine aktiven Transfers</p>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <dialog id="connect-dialog" class="connect-dialog" aria-labelledby="wizard-title">
+      <form method="dialog" class="dialog-card simple-wizard">
+        <header class="dialog-header">
+          <div>
+            <h2 id="wizard-title">Geräte verbinden</h2>
+            <p id="wizard-subtitle">Wähle zuerst, welches Gerät startet.</p>
+          </div>
+          <button id="close-wizard" class="icon-button" value="close" aria-label="Schließen">×</button>
+        </header>
+
+        <div class="wizard-progress" aria-label="Fortschritt">
+          <span id="wizard-dot-1" class="active"></span>
+          <span id="wizard-dot-2"></span>
+          <span id="wizard-dot-3"></span>
+          <span id="wizard-dot-4"></span>
+        </div>
+
+        <section id="wizard-choose" class="wizard-page">
+          <div class="wizard-step-label">Schritt 1</div>
+          <h3>Wer ist welches Gerät?</h3>
+          <p class="wizard-copy">Nimm ein Gerät als A. Das andere Gerät ist B. Beide öffnen diesen Assistenten.</p>
+          <div class="choice-grid">
+            <button id="wizard-start-a" type="button" class="choice-card">
+              <strong>Ich bin Gerät A</strong>
+              <span>Startet die Verbindung und zeigt eine Einladung.</span>
+            </button>
+            <button id="wizard-start-b" type="button" class="choice-card">
+              <strong>Ich bin Gerät B</strong>
+              <span>Scannt oder kopiert die Einladung von Gerät A.</span>
+            </button>
+          </div>
+        </section>
+
+        <section id="wizard-offer" class="wizard-page" hidden>
+          <div class="wizard-step-label">Gerät A · Schritt 2</div>
+          <h3>Zeige diese Einladung Gerät B</h3>
+          <div class="qr-card">
+            <canvas id="wizard-offer-qr" width="360" height="360" aria-label="Einladungs-QR-Code"></canvas>
+            <p id="wizard-offer-qr-note">QR wird lokal erzeugt.</p>
+          </div>
+          <details class="code-details">
+            <summary>Code anzeigen</summary>
+            <textarea id="wizard-offer-code" readonly spellcheck="false" rows="8"></textarea>
+          </details>
+          <div class="button-row">
+            <button id="wizard-copy-offer" type="button" class="ghost">Kopieren</button>
+            <button id="wizard-offer-next" type="button" class="primary">Weiter</button>
+          </div>
+        </section>
+
+        <section id="wizard-answer-input" class="wizard-page" hidden>
+          <div class="wizard-step-label">Gerät A · Schritt 3</div>
+          <h3>Antwort von Gerät B scannen</h3>
+          <button id="wizard-scan-answer" type="button" class="ghost full">QR scannen</button>
+          <p id="wizard-scan-answer-state" class="wizard-copy">Oder Antwortcode einfügen.</p>
+          <video id="wizard-answer-video" class="scan-video" playsinline hidden></video>
+          <textarea id="wizard-answer-code" spellcheck="false" rows="8" placeholder="Antwortcode von Gerät B"></textarea>
+          <button id="wizard-process-answer" type="button" class="primary full">Antwort verarbeiten</button>
+        </section>
+
+        <section id="wizard-offer-input" class="wizard-page" hidden>
+          <div class="wizard-step-label">Gerät B · Schritt 2</div>
+          <h3>Einladung von Gerät A scannen</h3>
+          <button id="wizard-scan-offer" type="button" class="ghost full">QR scannen</button>
+          <p id="wizard-scan-offer-state" class="wizard-copy">Oder Einladungscode einfügen.</p>
+          <video id="wizard-offer-video" class="scan-video" playsinline hidden></video>
+          <textarea id="wizard-remote-offer-code" spellcheck="false" rows="8" placeholder="Einladungscode von Gerät A"></textarea>
+          <button id="wizard-process-offer" type="button" class="primary full">Einladung verarbeiten</button>
+        </section>
+
+        <section id="wizard-answer-output" class="wizard-page" hidden>
+          <div class="wizard-step-label">Gerät B · Schritt 3</div>
+          <h3>Zeige diese Antwort Gerät A</h3>
+          <div class="qr-card">
+            <canvas id="wizard-answer-qr" width="360" height="360" aria-label="Antwort-QR-Code"></canvas>
+            <p id="wizard-answer-qr-note">QR wird lokal erzeugt.</p>
+          </div>
+          <details class="code-details">
+            <summary>Code anzeigen</summary>
+            <textarea id="wizard-local-answer-code" readonly spellcheck="false" rows="8"></textarea>
+          </details>
+          <button id="wizard-copy-answer" type="button" class="ghost full">Antwort kopieren</button>
+          <button id="wizard-answer-wait" type="button" class="primary full">Ich habe die Antwort gezeigt</button>
+        </section>
+
+        <section id="wizard-wait" class="wizard-page" hidden>
+          <div class="wizard-step-label">Verbindung wird aufgebaut</div>
+          <h3>Beide Geräte offen lassen</h3>
+          <p id="wizard-wait-state" class="wizard-copy">
+            Sobald der verschlüsselte Kanal steht, erscheint hier automatisch der Sicherheitscode.
+          </p>
+          <div class="wait-card">
+            <span class="spinner" aria-hidden="true"></span>
+            <strong>Warte auf WebRTC und E2E-Handshake</strong>
+          </div>
+        </section>
+
+        <section id="wizard-secure" class="wizard-page" hidden>
+          <div class="wizard-step-label">Letzter Schritt</div>
+          <h3>Sicherheitscode vergleichen</h3>
+          <p class="wizard-copy">Der Code muss auf beiden Geräten gleich sein.</p>
+          <strong id="wizard-sas-code" class="wizard-sas">------</strong>
+          <button id="wizard-confirm-sas" type="button" class="primary full">Code stimmt überein</button>
+          <p id="wizard-secure-state" class="wizard-copy">Warte auf verschlüsselten Kanal.</p>
+        </section>
+      </form>
+    </dialog>
+
+    <script src="./src/vendor/pako.min.js?v=3"></script>
+    <script src="./src/vendor/qrcode-generator.js?v=3"></script>
+    <script src="./src/vendor/jsQR.js?v=3"></script>
+    <script type="module" src="./src/main.js?v=9"></script>
+  </body>
+</html>
