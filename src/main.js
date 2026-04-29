@@ -15,6 +15,7 @@ const els = {
   connectionDetail: document.querySelector("#connection-detail"),
   securityPill: document.querySelector("#security-pill"),
   mobileSettings: document.querySelector("#mobile-settings"),
+  closeMobileSettings: document.querySelector("#close-mobile-settings"),
   deleteChat: document.querySelector("#delete-chat"),
   peerSummary: document.querySelector("#peer-summary"),
   sasCode: document.querySelector("#sas-code"),
@@ -99,6 +100,7 @@ const ICE_GATHER_TIMEOUT_MS = 10000;
 const CONNECTION_TIMEOUT_MS = 35000;
 const SIGNALING_PROTOCOL = "lan-secure-chat-signal-v1";
 const SIGNALING_ROOM_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_SIGNALING_SERVER = "https://signaling.p2p.di0n.de";
 
 const state = {
   db: null,
@@ -178,7 +180,8 @@ async function init() {
     els.displayName.value = defaultName();
   }
   localStorage.setItem("displayName", els.displayName.value);
-  els.signalingServer.value = localStorage.getItem("signalingServer") || "";
+  els.signalingServer.value = localStorage.getItem("signalingServer") || DEFAULT_SIGNALING_SERVER;
+  localStorage.setItem("signalingServer", normalizeSignalingServer(els.signalingServer.value));
   state.messages = loadMessages();
   state.conversations = loadConversations();
   state.activeChatId = localStorage.getItem("activeChatId") || Object.keys(state.conversations)[0] || "default";
@@ -270,6 +273,10 @@ els.connectDialog.addEventListener("close", () => {
 
 els.mobileSettings.addEventListener("click", () => {
   document.querySelector(".app-shell").classList.toggle("show-settings");
+});
+
+els.closeMobileSettings.addEventListener("click", () => {
+  document.querySelector(".app-shell").classList.remove("show-settings");
 });
 
 els.deleteChat.addEventListener("click", () => {
@@ -535,11 +542,11 @@ function openDeviceNameDialog() {
 }
 
 async function startSignalingInvite() {
-  const serverUrl = normalizeSignalingServer(els.signalingServer.value);
+  let serverUrl = normalizeSignalingServer(els.signalingServer.value);
   if (!serverUrl) {
-    setConnection("idle", "Kein Signaling-Server", "Trage einen WebSocket-Server ein oder nutze Erweitert für manuelle Codes.");
-    els.wizardInviteQrNote.textContent = "Kein Signaling-Server eingetragen.";
-    return;
+    els.signalingServer.value = DEFAULT_SIGNALING_SERVER;
+    serverUrl = normalizeSignalingServer(DEFAULT_SIGNALING_SERVER);
+    localStorage.setItem("signalingServer", serverUrl);
   }
 
   const roomId = shortRoomId();
@@ -632,8 +639,13 @@ async function handleSignalingMessage(raw) {
   const message = JSON.parse(raw);
   if (message.clientId && message.clientId === state.signaling.clientId) return;
   if (message.protocol && message.protocol !== SIGNALING_PROTOCOL) return;
-  if (message.type === "peer-joined" && state.signaling.isOfferer && !state.pc) {
-    await createOfferForSignaling();
+  if (message.type === "peer-joined" && state.signaling.isOfferer) {
+    if (!state.pc) {
+      await createOfferForSignaling();
+    } else if (state.pc.localDescription) {
+      sendSignaling({ type: "signal", kind: "offer", description: state.pc.localDescription });
+      setConnection("connecting", "Einladung gesendet", "Peer ist im Raum. Warte auf Antwort.");
+    }
     return;
   }
   if (message.type !== "signal") return;

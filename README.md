@@ -65,7 +65,7 @@ The optional Worker lives in `cloudflare-signaling/`. Deploy it separately and p
 
 1. App öffnen.
 2. Auf Desktop links `Signaling-Server` öffnen. Auf Mobile `Einstellungen` öffnen und dann `Signaling-Server`.
-3. Die Worker-URL eintragen, zum Beispiel `https://lan-secure-chat-signaling.<account>.workers.dev` oder direkt `wss://lan-secure-chat-signaling.<account>.workers.dev`.
+3. Standardmaessig ist `https://signaling.p2p.di0n.de` eingetragen. Du kannst stattdessen eine eigene Worker-URL eintragen, zum Beispiel `https://lan-secure-chat-signaling.<account>.workers.dev` oder direkt `wss://lan-secure-chat-signaling.<account>.workers.dev`.
 4. `Verbinden` öffnen und eine Einladung starten. Der Invite-Link enthält nur Raum-ID und Server-URL, keine Chatnachrichten oder Schlüssel.
 
 ### Cloudflare Signaling deployen
