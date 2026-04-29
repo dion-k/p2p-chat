@@ -1,0 +1,13 @@
+{
+  "name": "lan-secure-chat-signaling",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "wrangler check"
+  },
+  "devDependencies": {
+    "wrangler": "^4.68.0"
+  }
+}

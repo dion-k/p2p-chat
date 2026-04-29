@@ -37,7 +37,7 @@
             <span>WebSocket-URL</span>
             <input id="signaling-server" autocomplete="off" placeholder="wss://dein-worker.example.workers.dev" />
           </label>
-          <p class="hint">Optional. Der Server vermittelt nur WebRTC-Signaling, keine Chatnachrichten oder Schlüssel.</p>
+          <p class="hint">In Cloudflare `cloudflare-signaling` deployen, danach die Worker-URL hier eintragen.</p>
         </details>
 
         <div class="connection-state">
@@ -282,9 +282,25 @@
       </form>
     </dialog>
 
+    <dialog id="device-name-dialog" class="connect-dialog" aria-labelledby="device-name-title">
+      <form method="dialog" class="dialog-card name-card">
+        <div class="device-badge" aria-hidden="true">LC</div>
+        <div>
+          <div class="wizard-step-label">Dieses Gerät</div>
+          <h2 id="device-name-title">Wie soll dein Gerät heißen?</h2>
+          <p class="wizard-copy">Der Name wird nur lokal gespeichert und im verschlüsselten Handshake angezeigt.</p>
+        </div>
+        <label class="field">
+          <span>Gerätename</span>
+          <input id="device-name-input" autocomplete="nickname" maxlength="42" placeholder="z. B. Dions iPhone" />
+        </label>
+        <button id="save-device-name" type="button" class="primary full">Weiter</button>
+      </form>
+    </dialog>
+
     <script src="./src/vendor/pako.min.js?v=3"></script>
     <script src="./src/vendor/qrcode-generator.js?v=3"></script>
     <script src="./src/vendor/jsQR.js?v=3"></script>
-    <script type="module" src="./src/main.js?v=11"></script>
+    <script type="module" src="./src/main.js?v=12"></script>
   </body>
 </html>

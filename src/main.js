@@ -32,6 +32,9 @@ const els = {
   newChat: document.querySelector("#new-chat"),
   openWizard: document.querySelector("#open-wizard"),
   connectDialog: document.querySelector("#connect-dialog"),
+  deviceNameDialog: document.querySelector("#device-name-dialog"),
+  deviceNameInput: document.querySelector("#device-name-input"),
+  saveDeviceName: document.querySelector("#save-device-name"),
   closeWizard: document.querySelector("#close-wizard"),
   wizardSubtitle: document.querySelector("#wizard-subtitle"),
   wizardPages: [...document.querySelectorAll(".wizard-page")],
@@ -172,7 +175,7 @@ async function init() {
   state.localIdentityKey = b64(state.identity.publicKeySpki);
   els.displayName.value = localStorage.getItem("displayName") || "";
   if (!els.displayName.value) {
-    els.displayName.value = window.prompt("Wie soll dieses Gerät im Chat heißen?", defaultName())?.trim() || defaultName();
+    els.displayName.value = defaultName();
   }
   localStorage.setItem("displayName", els.displayName.value);
   els.signalingServer.value = localStorage.getItem("signalingServer") || "";
@@ -186,7 +189,9 @@ async function init() {
   renderChatList();
   renderMessages();
   renderSecurity();
-  if (!localStorage.getItem("hasSeenSetup")) {
+  if (!localStorage.getItem("displayNameConfirmed")) {
+    window.setTimeout(() => openDeviceNameDialog(), 180);
+  } else if (!localStorage.getItem("hasSeenSetup")) {
     localStorage.setItem("hasSeenSetup", "1");
     window.setTimeout(() => openSetupDialog(), 250);
   } else {
@@ -197,6 +202,27 @@ async function init() {
 els.displayName.addEventListener("input", () => {
   localStorage.setItem("displayName", els.displayName.value.trim());
 });
+
+els.saveDeviceName.addEventListener("click", () => {
+  saveDeviceName();
+});
+
+els.deviceNameDialog.addEventListener("submit", (event) => {
+  event.preventDefault();
+  saveDeviceName();
+});
+
+function saveDeviceName() {
+  const name = els.deviceNameInput.value.trim() || defaultName();
+  els.displayName.value = name;
+  localStorage.setItem("displayName", name);
+  localStorage.setItem("displayNameConfirmed", "1");
+  if (els.deviceNameDialog.open) els.deviceNameDialog.close();
+  if (!localStorage.getItem("hasSeenSetup")) {
+    localStorage.setItem("hasSeenSetup", "1");
+    window.setTimeout(() => openSetupDialog(), 120);
+  }
+}
 
 els.signalingServer.addEventListener("input", () => {
   localStorage.setItem("signalingServer", normalizeSignalingServer(els.signalingServer.value));
@@ -500,6 +526,12 @@ function openSetupDialog() {
   }
   showWizardPage("wizard-choose", 1, "Code oder Link teilen, scannen oder eingeben.");
   if (!els.connectDialog.open) els.connectDialog.showModal();
+}
+
+function openDeviceNameDialog() {
+  els.deviceNameInput.value = els.displayName.value || defaultName();
+  if (!els.deviceNameDialog.open) els.deviceNameDialog.showModal();
+  window.setTimeout(() => els.deviceNameInput.focus(), 50);
 }
 
 async function startSignalingInvite() {

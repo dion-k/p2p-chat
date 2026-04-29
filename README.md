@@ -61,6 +61,35 @@ Cloudflare limits and resource notes:
 
 The optional Worker lives in `cloudflare-signaling/`. Deploy it separately and paste the resulting `wss://...workers.dev` URL into the app's Signaling-Server field.
 
+### Signaling-Server eintragen
+
+1. App öffnen.
+2. Auf Desktop links `Signaling-Server` öffnen. Auf Mobile `Einstellungen` öffnen und dann `Signaling-Server`.
+3. Die Worker-URL eintragen, zum Beispiel `https://lan-secure-chat-signaling.<account>.workers.dev` oder direkt `wss://lan-secure-chat-signaling.<account>.workers.dev`.
+4. `Verbinden` öffnen und eine Einladung starten. Der Invite-Link enthält nur Raum-ID und Server-URL, keine Chatnachrichten oder Schlüssel.
+
+### Cloudflare Signaling deployen
+
+Voraussetzung: Node.js und ein Cloudflare-Account.
+
+```bash
+cd cloudflare-signaling
+npm install
+npx wrangler login
+npm run deploy
+```
+
+Wrangler verwendet `wrangler.jsonc`. Darin ist ein Durable Object Binding `SIGNALING_ROOM` mit der Klasse `SignalingRoom` und eine `new_sqlite_classes`-Migration `v1` definiert. Cloudflare empfiehlt `wrangler.jsonc` fuer neue Projekte, und Durable-Object-Migrationen werden beim `wrangler deploy` angewendet. Nach dem Deploy zeigt Wrangler die Worker-URL an; diese URL in der App als Signaling-Server eintragen.
+
+Lokaler Test des Signaling Workers:
+
+```bash
+cd cloudflare-signaling
+npm run dev
+```
+
+Danach in der App `ws://127.0.0.1:8787` als Signaling-Server eintragen.
+
 ## Pairing flow
 
 Use `Verbinden` on both devices.
