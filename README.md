@@ -56,8 +56,9 @@ Cloudflare limits and resource notes:
 - Durable Objects are appropriate here because each room is an independent coordination atom.
 - A single Durable Object is single-threaded; this app keeps rooms small and short-lived.
 - Cloudflare documents a soft per-object throughput around 1,000 simple requests per second and a 32 MiB received WebSocket message limit. The included Worker rejects signaling frames over 256 KiB.
-- SQLite-backed Durable Objects are available on Free/Paid Workers plans; Free accounts have account-level Durable Object storage limits. This implementation avoids persistent room data except the alarm metadata.
+- SQLite-backed Durable Objects are available on Free/Paid Workers plans; Free accounts have account-level Durable Object storage limits. This implementation stores only short-lived WebRTC signaling frames per active room and deletes them when the room expires.
 - WebSocket hibernation is used through the Durable Object WebSocket API so idle connected rooms can avoid continuous duration charges.
+- The signaling protocol uses join acknowledgements, active-peer notifications, short-lived signal replay, and Trickle ICE candidates. No chat plaintext or E2E session keys are sent to the Worker.
 
 The optional Worker lives in `cloudflare-signaling/`. Deploy it separately and paste the resulting `wss://...workers.dev` URL into the app's Signaling-Server field.
 

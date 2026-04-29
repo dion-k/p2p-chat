@@ -101,6 +101,7 @@ const CONNECTION_TIMEOUT_MS = 35000;
 const SIGNALING_PROTOCOL = "lan-secure-chat-signal-v1";
 const SIGNALING_ROOM_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_SIGNALING_SERVER = "https://signaling.p2p.di0n.de";
+const MAX_QUEUED_REMOTE_CANDIDATES = 80;
 
 const state = {
   db: null,
@@ -140,6 +141,10 @@ const state = {
     serverUrl: "",
     isOfferer: false,
     connectedAt: 0,
+    seenSignals: new Set(),
+    pendingCandidates: [],
+    offerInFlight: false,
+    lastRemoteOfferSdp: "",
   },
   diag: {
     localCandidates: 0,
@@ -590,6 +595,10 @@ async function connectSignaling(roomId, serverUrl, isOfferer) {
     serverUrl,
     isOfferer,
     connectedAt: Date.now(),
+    seenSignals: new Set(),
+    pendingCandidates: [],
+    offerInFlight: false,
+    lastRemoteOfferSdp: "",
   };
 
   const socketUrl = buildSignalingSocketUrl(serverUrl, roomId, state.signaling.clientId);
@@ -599,18 +608,21 @@ async function connectSignaling(roomId, serverUrl, isOfferer) {
   state.signaling.socket = socket;
 
   socket.addEventListener("open", async () => {
+    if (socket !== state.signaling.socket) return;
     sendSignaling({
       type: "join",
       protocol: SIGNALING_PROTOCOL,
       roomId,
       clientId: state.signaling.clientId,
       name: els.displayName.value.trim() || defaultName(),
+      role: isOfferer ? "offerer" : "answerer",
     });
     setConnection("connecting", "Signaling bereit", isOfferer ? "Sende WebRTC-Einladung." : "Warte auf WebRTC-Einladung.");
     if (isOfferer) await createOfferForSignaling();
   });
 
   socket.addEventListener("message", (event) => {
+    if (socket !== state.signaling.socket) return;
     handleSignalingMessage(event.data).catch((error) => {
       console.error(error);
       setConnection("idle", "Signaling-Fehler", error.message);
@@ -618,58 +630,150 @@ async function connectSignaling(roomId, serverUrl, isOfferer) {
   });
 
   socket.addEventListener("close", () => {
+    if (socket !== state.signaling.socket) return;
     if (!state.sessionKey) setConnection("idle", "Signaling getrennt", "Verlauf bleibt lokal. Zum Senden neu verbinden.");
   });
 
   socket.addEventListener("error", () => {
+    if (socket !== state.signaling.socket) return;
     setConnection("idle", "Signaling nicht erreichbar", "Prüfe WebSocket-URL oder nutze Erweitert für manuelle Codes.");
   });
 }
 
 async function createOfferForSignaling() {
-  setupPeerConnection(true);
-  const offer = await state.pc.createOffer();
-  await state.pc.setLocalDescription(offer);
-  await waitForIceGathering(state.pc);
-  sendSignaling({ type: "signal", kind: "offer", description: state.pc.localDescription });
-  startConnectionWatch();
+  if (state.signaling.offerInFlight) return;
+  if (state.pc?.localDescription) {
+    sendSignaling({ type: "signal", kind: "offer", description: state.pc.localDescription });
+    setConnection("connecting", "Einladung gesendet", "Peer ist im Raum. Warte auf Antwort.");
+    return;
+  }
+
+  state.signaling.offerInFlight = true;
+  try {
+    setupPeerConnection(true);
+    const offer = await state.pc.createOffer();
+    await state.pc.setLocalDescription(offer);
+    sendSignaling({ type: "signal", kind: "offer", description: state.pc.localDescription });
+    setConnection("connecting", "Einladung gesendet", "Warte auf Antwort und tausche Netzwerkkandidaten aus.");
+    const pc = state.pc;
+    startConnectionWatch();
+    waitForIceGathering(pc).then(() => {
+      if (state.pc === pc && pc.localDescription && pc.signalingState === "have-local-offer") {
+        sendSignaling({ type: "signal", kind: "offer", description: pc.localDescription });
+      }
+    }).catch((error) => console.warn("ICE gathering failed", error));
+  } finally {
+    state.signaling.offerInFlight = false;
+  }
 }
 
 async function handleSignalingMessage(raw) {
   const message = JSON.parse(raw);
   if (message.clientId && message.clientId === state.signaling.clientId) return;
   if (message.protocol && message.protocol !== SIGNALING_PROTOCOL) return;
+
+  if (message.type === "room-ready") {
+    const peerCount = Array.isArray(message.peers) ? message.peers.length : 0;
+    if (state.signaling.isOfferer && peerCount > 0) await createOfferForSignaling();
+    return;
+  }
+
   if (message.type === "peer-joined" && state.signaling.isOfferer) {
-    if (!state.pc) {
-      await createOfferForSignaling();
-    } else if (state.pc.localDescription) {
-      sendSignaling({ type: "signal", kind: "offer", description: state.pc.localDescription });
-      setConnection("connecting", "Einladung gesendet", "Peer ist im Raum. Warte auf Antwort.");
-    }
+    await createOfferForSignaling();
+    return;
+  }
+
+  if (message.type === "signal-ack") return;
+  if (message.type === "error") {
+    setConnection("idle", "Signaling-Fehler", message.message || "Der Signaling-Server hat die Nachricht abgelehnt.");
     return;
   }
   if (message.type !== "signal") return;
 
+  if (message.id) {
+    if (state.signaling.seenSignals.has(message.id)) return;
+    state.signaling.seenSignals.add(message.id);
+  }
+
+  if (message.kind === "candidate") {
+    await queueOrAddRemoteCandidate(message.candidate);
+    return;
+  }
+
   if (message.kind === "offer") {
-    if (state.signaling.isOfferer) return;
-    setupPeerConnection(false);
-    state.diag.remoteCandidates = countCandidates(message.description);
-    await state.pc.setRemoteDescription(message.description);
-    const answer = await state.pc.createAnswer();
-    await state.pc.setLocalDescription(answer);
-    await waitForIceGathering(state.pc);
-    sendSignaling({ type: "signal", kind: "answer", description: state.pc.localDescription });
-    setConnection("connecting", "Antwort gesendet", "Warte auf verschlüsselten Kanal.");
-    startConnectionWatch();
+    await handleRemoteOffer(message);
     return;
   }
 
   if (message.kind === "answer") {
-    if (!state.pc || state.pc.signalingState !== "have-local-offer") return;
-    state.diag.remoteCandidates = countCandidates(message.description);
-    await state.pc.setRemoteDescription(message.description);
-    setConnection("connecting", "Antwort verarbeitet", "Warte auf verschlüsselten Kanal.");
-    startConnectionWatch();
+    await handleRemoteAnswer(message);
+  }
+}
+
+async function handleRemoteOffer(message) {
+  if (state.signaling.isOfferer || !message.description) return;
+  const remoteSdp = message.description.sdp || "";
+
+  if (state.pc?.remoteDescription?.type === "offer" && state.pc.localDescription) {
+    if (state.pc.localDescription) {
+      sendSignaling({ type: "signal", kind: "answer", description: state.pc.localDescription });
+    }
+    return;
+  }
+
+  if (state.pc) state.pc.close();
+  setupPeerConnection(false);
+  state.signaling.lastRemoteOfferSdp = remoteSdp;
+  state.diag.remoteCandidates = countCandidates(message.description);
+  await state.pc.setRemoteDescription(message.description);
+  await flushRemoteCandidates();
+  const answer = await state.pc.createAnswer();
+  await state.pc.setLocalDescription(answer);
+  sendSignaling({ type: "signal", kind: "answer", description: state.pc.localDescription });
+  setConnection("connecting", "Antwort gesendet", "Warte auf verschlüsselten Kanal.");
+  const pc = state.pc;
+  startConnectionWatch();
+  await waitForIceGathering(pc);
+  if (state.pc === pc && pc.localDescription && pc.signalingState === "stable") {
+    sendSignaling({ type: "signal", kind: "answer", description: pc.localDescription });
+  }
+}
+
+async function handleRemoteAnswer(message) {
+  if (!state.pc || !message.description) return;
+  if (state.pc.signalingState === "stable") return;
+  if (state.pc.signalingState !== "have-local-offer") return;
+  state.diag.remoteCandidates = countCandidates(message.description);
+  await state.pc.setRemoteDescription(message.description);
+  await flushRemoteCandidates();
+  setConnection("connecting", "Antwort verarbeitet", "Warte auf verschlüsselten Kanal.");
+  startConnectionWatch();
+}
+
+async function queueOrAddRemoteCandidate(candidate) {
+  if (!candidate?.candidate) return;
+  state.diag.remoteCandidates += 1;
+  if (!state.pc || !state.pc.remoteDescription) {
+    state.signaling.pendingCandidates.push(candidate);
+    state.signaling.pendingCandidates = state.signaling.pendingCandidates.slice(-MAX_QUEUED_REMOTE_CANDIDATES);
+    return;
+  }
+  await addRemoteCandidate(candidate);
+}
+
+async function flushRemoteCandidates() {
+  if (!state.pc?.remoteDescription) return;
+  const candidates = state.signaling.pendingCandidates.splice(0);
+  for (const candidate of candidates) {
+    await addRemoteCandidate(candidate);
+  }
+}
+
+async function addRemoteCandidate(candidate) {
+  try {
+    await state.pc.addIceCandidate(new RTCIceCandidate(candidate));
+  } catch (error) {
+    console.warn("Remote ICE candidate rejected", error);
   }
 }
 
@@ -678,9 +782,11 @@ function sendSignaling(message) {
   if (socket?.readyState !== WebSocket.OPEN) return;
   socket.send(JSON.stringify({
     ...message,
+    id: message.id || crypto.randomUUID(),
     protocol: SIGNALING_PROTOCOL,
     roomId: state.signaling.roomId,
     clientId: state.signaling.clientId,
+    name: els.displayName.value.trim() || defaultName(),
   }));
 }
 
@@ -838,6 +944,9 @@ function setupPeerConnection(isOfferer) {
     state.diag.localCandidates += 1;
     const match = event.candidate.candidate.match(/ typ ([a-z]+)/);
     if (match) state.diag.candidateTypes.add(match[1]);
+    if (state.signaling.socket?.readyState === WebSocket.OPEN) {
+      sendSignaling({ type: "signal", kind: "candidate", candidate: event.candidate.toJSON() });
+    }
     updateWizardFromConnection();
   });
   state.pc.addEventListener("connectionstatechange", () => {
