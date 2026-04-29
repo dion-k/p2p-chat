@@ -1,4 +1,4 @@
-const CACHE_NAME = "lan-secure-chat-v9";
+const CACHE_NAME = "lan-secure-chat-v11";
 const ASSETS = [
   "./",
   "./index.html",
