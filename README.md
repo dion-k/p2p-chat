@@ -7,7 +7,7 @@ Static browser-first encrypted peer-to-peer chat over WebRTC DataChannels.
 Local-only HTTP:
 
 ```bash
-python3 -m http.server 4173 --bind 127.0.0.1
+python3 -m http.server 4173 --bind 127.0.0.1 --directory public
 ```
 
 LAN HTTPS:
@@ -22,17 +22,19 @@ For another device in the LAN, the app should be served from HTTPS or another br
 
 ## Static hosting
 
-The app is static client-side code and can be hosted on GitHub Pages, Cloudflare Pages, Netlify, or any HTTPS static host. Upload the repository root as the site directory.
+The app is static client-side code and can be hosted on GitHub Pages, Cloudflare Pages, Netlify, Cloudflare Workers Static Assets, or any HTTPS static host. Upload `public/` as the static site directory. Do not upload the repository root as public assets.
 
 Required static files:
 
-- `index.html`
-- `styles.css`
-- `manifest.webmanifest`
-- `sw.js`
-- `icons/icon.svg`
-- `src/main.js`
-- `src/vendor/*`
+- `public/index.html`
+- `public/styles.css`
+- `public/manifest.webmanifest`
+- `public/sw.js`
+- `public/icons/icon.svg`
+- `public/src/main.js`
+- `public/src/vendor/*`
+
+For Cloudflare Workers Static Assets, the root `wrangler.jsonc` deploys only `./public` and uses `assets.not_found_handling = "single-page-application"` for short invite URLs such as `/s/ABCD-EFGH-JK`.
 
 No chat messages are sent to the static host. The host only serves the app files. WebRTC signaling can be manual or use an optional WebSocket signaling server. Pending text messages are kept locally and retried after the next verified reconnect.
 
