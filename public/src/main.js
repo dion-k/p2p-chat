@@ -19,6 +19,7 @@ const els = {
   deleteChat: document.querySelector("#delete-chat"),
   peerSummary: document.querySelector("#peer-summary"),
   sasCode: document.querySelector("#sas-code"),
+  peerCodes: document.querySelector("#peer-codes"),
   sessionKeyId: document.querySelector("#session-key-id"),
   confirmSas: document.querySelector("#confirm-sas"),
   messages: document.querySelector("#messages"),
@@ -80,6 +81,7 @@ const els = {
   wizardAnswerWait: document.querySelector("#wizard-answer-wait"),
   wizardWaitState: document.querySelector("#wizard-wait-state"),
   wizardSasCode: document.querySelector("#wizard-sas-code"),
+  wizardPeerCodes: document.querySelector("#wizard-peer-codes"),
   wizardConfirmSas: document.querySelector("#wizard-confirm-sas"),
   wizardSecureState: document.querySelector("#wizard-secure-state"),
   checks: {
@@ -113,6 +115,7 @@ const state = {
   pc: null,
   channel: null,
   sessions: new Map(),
+  peerSessions: new Map(),
   localHello: null,
   remoteHello: null,
   remoteIdentityKey: null,
@@ -169,7 +172,7 @@ async function init() {
   if (location.protocol === "file:") {
     els.secureWarning.hidden = false;
     els.secureWarning.textContent =
-      "Du öffnest die App über file://. Für echte Geräte bitte https://10.93.10.69:4443 verwenden.";
+      "Du öffnest die App über file://. Für echte Geräte bitte localhost oder eine HTTPS-Adresse im LAN verwenden.";
   }
 
   if (!window.isSecureContext || !crypto.subtle) {
@@ -200,8 +203,12 @@ async function init() {
   renderSecurity();
   if (!localStorage.getItem("displayNameConfirmed")) {
     window.setTimeout(() => openDeviceNameDialog(), 180);
-  } else if (state.startupInvite) {
+  } else if (state.startupInvite && !isOwnKnownInvite(state.startupInvite)) {
     window.setTimeout(() => acceptStartupInvite(), 250);
+  } else if (state.startupInvite) {
+    state.startupInvite = null;
+    clearInviteRoute();
+    window.setTimeout(() => autoReconnectKnownChat(), 450);
   } else if (!localStorage.getItem("hasSeenSetup")) {
     localStorage.setItem("hasSeenSetup", "1");
     window.setTimeout(() => openSetupDialog(), 250);
@@ -235,8 +242,12 @@ function saveDeviceName() {
   localStorage.setItem("displayName", name);
   localStorage.setItem("displayNameConfirmed", "1");
   if (els.deviceNameDialog.open) els.deviceNameDialog.close();
-  if (state.startupInvite) {
+  if (state.startupInvite && !isOwnKnownInvite(state.startupInvite)) {
     window.setTimeout(() => acceptStartupInvite(), 120);
+  } else if (state.startupInvite) {
+    state.startupInvite = null;
+    clearInviteRoute();
+    window.setTimeout(() => autoReconnectKnownChat(), 250);
   } else if (!localStorage.getItem("hasSeenSetup")) {
     localStorage.setItem("hasSeenSetup", "1");
     window.setTimeout(() => openSetupDialog(), 120);
@@ -655,8 +666,11 @@ async function connectSignaling(roomId, serverUrl, isOfferer) {
       name: els.displayName.value.trim() || defaultName(),
       role: isOfferer ? "offerer" : "answerer",
     });
-    setConnection("connecting", "Signaling bereit", isOfferer ? "Sende WebRTC-Einladung." : "Warte auf WebRTC-Einladung.");
-    if (isOfferer) await createOfferForSignaling();
+    setConnection(
+      "connecting",
+      "Signaling bereit",
+      isOfferer ? "Warte auf weitere Geräte im Raum." : "Suche bekannte Geräte im Raum.",
+    );
   });
 
   socket.addEventListener("message", (event) => {
@@ -713,15 +727,18 @@ async function handleSignalingMessage(raw) {
   const message = JSON.parse(raw);
   if (message.clientId && message.clientId === state.signaling.clientId) return;
   if (message.protocol && message.protocol !== SIGNALING_PROTOCOL) return;
+  if (message.targetClientId && message.targetClientId !== state.signaling.clientId) return;
 
   if (message.type === "room-ready") {
-    const peerCount = Array.isArray(message.peers) ? message.peers.length : 0;
-    if (state.signaling.isOfferer && peerCount > 0) await createOfferForSignaling();
+    const peers = Array.isArray(message.peers) ? message.peers : [];
+    for (const peer of peers) {
+      await connectGroupPeer(peer.clientId, shouldOfferToPeer(peer.clientId), peer.name);
+    }
     return;
   }
 
-  if (message.type === "peer-joined" && state.signaling.isOfferer) {
-    await createOfferForSignaling();
+  if (message.type === "peer-joined") {
+    await connectGroupPeer(message.clientId, shouldOfferToPeer(message.clientId), message.name);
     return;
   }
 
@@ -737,18 +754,236 @@ async function handleSignalingMessage(raw) {
     state.signaling.seenSignals.add(message.id);
   }
 
+  const peerSession = ensurePeerSession(message.clientId, message.name);
+
   if (message.kind === "candidate") {
-    await queueOrAddRemoteCandidate(message.candidate);
+    await queueOrAddRemoteCandidateForSession(peerSession, message.candidate);
     return;
   }
 
   if (message.kind === "offer") {
-    await handleRemoteOffer(message);
+    await handleGroupRemoteOffer(peerSession, message);
     return;
   }
 
   if (message.kind === "answer") {
-    await handleRemoteAnswer(message);
+    await handleGroupRemoteAnswer(peerSession, message);
+  }
+}
+
+function shouldOfferToPeer(peerClientId) {
+  return state.signaling.clientId.localeCompare(peerClientId) < 0;
+}
+
+async function connectGroupPeer(peerClientId, isOfferer, name = "") {
+  if (!peerClientId || peerClientId === state.signaling.clientId) return;
+  const session = ensurePeerSession(peerClientId, name);
+  const stateName = session.pc?.connectionState;
+  const stale = ["failed", "disconnected", "closed"].includes(stateName);
+  if (stale || (session.sessionKey && session.channel?.readyState !== "open")) {
+    resetPeerSession(session);
+  }
+  if (session.sessionKey || session.offerInFlight || session.pc?.connectionState === "connected") return;
+  if (isOfferer) await createGroupOffer(session);
+}
+
+function ensurePeerSession(peerClientId, name = "") {
+  let session = state.peerSessions.get(peerClientId);
+  if (session) {
+    if (name) session.remoteName = name;
+    return session;
+  }
+  session = {
+    chatId: state.activeChatId,
+    peerClientId,
+    remoteName: name || "Peer",
+    pc: null,
+    channel: null,
+    localHello: null,
+    remoteHello: null,
+    remoteIdentityKey: null,
+    sessionKey: null,
+    sessionId: "",
+    sas: "",
+    sendSeq: 0,
+    localSasConfirmed: false,
+    remoteSasConfirmed: false,
+    pendingCandidates: [],
+    pending: new Map(),
+    offerInFlight: false,
+    files: new Map(),
+    establishedAt: 0,
+  };
+  state.peerSessions.set(peerClientId, session);
+  return session;
+}
+
+function resetPeerSession(session) {
+  for (const pending of session.pending.values()) window.clearTimeout(pending.timer);
+  session.pending.clear();
+  session.pc?.close();
+  Object.assign(session, {
+    pc: null,
+    channel: null,
+    localHello: null,
+    remoteHello: null,
+    remoteIdentityKey: null,
+    sessionKey: null,
+    sessionId: "",
+    sas: "",
+    sendSeq: 0,
+    localSasConfirmed: false,
+    remoteSasConfirmed: false,
+    pendingCandidates: [],
+    files: new Map(),
+    establishedAt: 0,
+  });
+}
+
+async function createGroupOffer(session) {
+  if (session.offerInFlight) return;
+  if (session.pc?.localDescription) {
+    sendSignaling({
+      type: "signal",
+      kind: "offer",
+      targetClientId: session.peerClientId,
+      description: session.pc.localDescription,
+    });
+    return;
+  }
+  session.offerInFlight = true;
+  try {
+    setupPeerConnectionForSession(session, true);
+    const offer = await session.pc.createOffer();
+    await session.pc.setLocalDescription(offer);
+    sendSignaling({
+      type: "signal",
+      kind: "offer",
+      targetClientId: session.peerClientId,
+      description: session.pc.localDescription,
+    });
+    setConnection("connecting", "Gruppenraum bereit", "Verbinde Peer-Sessions.");
+    waitForIceGathering(session.pc).then(() => {
+      if (session.pc?.localDescription && session.pc.signalingState === "have-local-offer") {
+        sendSignaling({
+          type: "signal",
+          kind: "offer",
+          targetClientId: session.peerClientId,
+          description: session.pc.localDescription,
+        });
+      }
+    }).catch((error) => console.warn("ICE gathering failed", error));
+  } finally {
+    session.offerInFlight = false;
+  }
+}
+
+function setupPeerConnectionForSession(session, isOfferer) {
+  session.pc?.close();
+  session.pendingCandidates = [];
+  session.pc = new RTCPeerConnection({
+    iceServers: ICE_SERVERS,
+    iceCandidatePoolSize: 4,
+  });
+  session.pc.addEventListener("icecandidate", (event) => {
+    if (!event.candidate) return;
+    state.diag.localCandidates += 1;
+    sendSignaling({
+      type: "signal",
+      kind: "candidate",
+      targetClientId: session.peerClientId,
+      candidate: event.candidate.toJSON(),
+    });
+  });
+  session.pc.addEventListener("connectionstatechange", () => {
+    state.diag.lastPeerState = session.pc.connectionState;
+    if (["failed", "disconnected"].includes(session.pc.connectionState)) renderReconnectButton();
+  });
+  if (isOfferer) {
+    session.channel = session.pc.createDataChannel("lan-secure-chat-v2", { ordered: true });
+    configurePeerChannel(session);
+  } else {
+    session.pc.addEventListener("datachannel", (event) => {
+      session.channel = event.channel;
+      configurePeerChannel(session);
+    });
+  }
+}
+
+function configurePeerChannel(session) {
+  session.channel.binaryType = "arraybuffer";
+  session.channel.addEventListener("open", async () => {
+    await sendHelloToSession(session);
+  });
+  session.channel.addEventListener("message", (event) => receiveFrameForSession(session, event.data));
+  session.channel.addEventListener("close", () => {
+    renderReconnectButton();
+    renderSecurity();
+  });
+}
+
+async function handleGroupRemoteOffer(session, message) {
+  if (!message.description) return;
+  if (session.pc?.remoteDescription?.type === "offer" && session.pc.localDescription) {
+    sendSignaling({
+      type: "signal",
+      kind: "answer",
+      targetClientId: session.peerClientId,
+      description: session.pc.localDescription,
+    });
+    return;
+  }
+  setupPeerConnectionForSession(session, false);
+  await session.pc.setRemoteDescription(message.description);
+  await flushRemoteCandidatesForSession(session);
+  const answer = await session.pc.createAnswer();
+  await session.pc.setLocalDescription(answer);
+  sendSignaling({
+    type: "signal",
+    kind: "answer",
+    targetClientId: session.peerClientId,
+    description: session.pc.localDescription,
+  });
+  waitForIceGathering(session.pc).then(() => {
+    if (session.pc?.localDescription && session.pc.signalingState === "stable") {
+      sendSignaling({
+        type: "signal",
+        kind: "answer",
+        targetClientId: session.peerClientId,
+        description: session.pc.localDescription,
+      });
+    }
+  }).catch((error) => console.warn("ICE gathering failed", error));
+}
+
+async function handleGroupRemoteAnswer(session, message) {
+  if (!session.pc || !message.description || session.pc.signalingState !== "have-local-offer") return;
+  await session.pc.setRemoteDescription(message.description);
+  await flushRemoteCandidatesForSession(session);
+}
+
+async function queueOrAddRemoteCandidateForSession(session, candidate) {
+  if (!candidate?.candidate) return;
+  state.diag.remoteCandidates += 1;
+  if (!session.pc?.remoteDescription) {
+    session.pendingCandidates.push(candidate);
+    session.pendingCandidates = session.pendingCandidates.slice(-MAX_QUEUED_REMOTE_CANDIDATES);
+    return;
+  }
+  await addRemoteCandidateToSession(session, candidate);
+}
+
+async function flushRemoteCandidatesForSession(session) {
+  if (!session.pc?.remoteDescription) return;
+  const candidates = session.pendingCandidates.splice(0);
+  for (const candidate of candidates) await addRemoteCandidateToSession(session, candidate);
+}
+
+async function addRemoteCandidateToSession(session, candidate) {
+  try {
+    await session.pc.addIceCandidate(new RTCIceCandidate(candidate));
+  } catch (error) {
+    console.warn("Remote ICE candidate rejected", error);
   }
 }
 
@@ -915,17 +1150,47 @@ function readInviteFromText(value) {
 
 async function acceptStartupInvite() {
   if (!state.startupInvite || !requireDeviceName()) return;
+  if (isOwnKnownInvite(state.startupInvite)) {
+    state.startupInvite = null;
+    clearInviteRoute();
+    return;
+  }
   localStorage.setItem("hasSeenSetup", "1");
   showWizardPage("wizard-wait", 4, "Invite erkannt. Verbindung wird automatisch aufgebaut.");
   if (!els.connectDialog.open) els.connectDialog.showModal();
   const invite = state.startupInvite;
   state.startupInvite = null;
+  clearInviteRoute();
   els.wizardInviteInput.value = invite.link || location.href;
   els.wizardShortCode.textContent = formatRoomCode(invite.roomId);
   els.wizardInviteLink.value = invite.link || location.href;
   renderQr(els.wizardInviteQr, els.wizardInviteQrNote, invite.link || location.href);
   rememberSignalingRoom(invite.roomId, invite.serverUrl, false);
   await connectSignaling(invite.roomId, invite.serverUrl, false);
+}
+
+function clearInviteRoute() {
+  if (location.hash.includes("invite=") || location.pathname.startsWith("/s/")) {
+    history.replaceState(null, "", "/");
+  }
+}
+
+function isOwnKnownInvite(invite) {
+  if (!invite) return false;
+  const normalizedRoom = normalizeRoomCode(invite.roomId);
+  const normalizedServer = normalizeSignalingServer(invite.serverUrl);
+  if (
+    normalizeRoomCode(state.signaling.roomId || "") === normalizedRoom &&
+    normalizeSignalingServer(state.signaling.serverUrl || "") === normalizedServer &&
+    state.signaling.isOfferer === true
+  ) {
+    return true;
+  }
+  return Object.values(state.conversations).some((conversation) =>
+    normalizeRoomCode(conversation.signalingRoomId || "") === normalizedRoom &&
+    normalizeSignalingServer(conversation.signalingServer || "") === normalizedServer &&
+    conversation.signalingIsOfferer === true,
+  );
 }
 
 function shortRoomId() {
@@ -998,7 +1263,17 @@ els.confirmSas.addEventListener("click", async () => {
 
 async function confirmSas() {
   state.localSasConfirmed = true;
-  await sendSecure({ kind: "sas-confirmed" }, { trackAck: false });
+  const establishedSessions = establishedPeerSessions();
+  if (establishedSessions.length > 0) {
+    for (const session of establishedSessions) {
+      session.localSasConfirmed = true;
+      await sendSecureToSession(session, { kind: "sas-confirmed" }, { trackAck: false });
+    }
+    const primary = establishedSessions.find((session) => session.remoteHello?.identityKey === state.remoteHello?.identityKey);
+    if (primary) adoptPeerSessionAsPrimary(primary);
+  } else {
+    await sendSecure({ kind: "sas-confirmed" }, { trackAck: false });
+  }
   await trustRemoteIdentity();
   renderSecurity();
 }
@@ -1018,7 +1293,7 @@ els.form.addEventListener("submit", async (event) => {
     senderIdentityKey: state.localIdentityKey,
     senderName: els.displayName.value.trim() || defaultName(),
   });
-  await sendSecure({ kind: "chat", id, body, createdAt: Date.now() }, { messageId: id });
+  await sendUserPayload({ kind: "chat", id, body, createdAt: Date.now() }, { messageId: id });
 });
 
 els.fileInput.addEventListener("change", async () => {
@@ -1094,6 +1369,7 @@ function configureChannel() {
   state.channel.addEventListener("message", (event) => receiveFrame(event.data));
   state.channel.addEventListener("close", () => {
     setConnection("idle", "Datenkanal geschlossen", "Erstelle bei Bedarf eine neue Einladung.");
+    renderSecurity();
   });
 }
 
@@ -1120,6 +1396,29 @@ async function sendHello() {
   await maybeEstablishSession();
 }
 
+async function sendHelloToSession(session) {
+  const eph = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+  const ephSpki = await crypto.subtle.exportKey("spki", eph.publicKey);
+  session.localHello = {
+    version: 2,
+    kind: "crypto-hello",
+    name: els.displayName.value.trim() || defaultName(),
+    identityKey: b64(state.identity.publicKeySpki),
+    ephKey: b64(ephSpki),
+    nonce: b64(randomBytes(24)),
+  };
+  session.localHello.signature = b64(
+    await crypto.subtle.sign(
+      { name: "ECDSA", hash: "SHA-256" },
+      state.identity.privateKey,
+      utf8(canonical(unsignedHello(session.localHello))),
+    ),
+  );
+  session.localHello.privateEph = eph.privateKey;
+  sendPlainToSession(session, publicHello(session.localHello));
+  await maybeEstablishPeerSession(session);
+}
+
 async function receiveFrame(raw) {
   const frame = JSON.parse(raw);
   if (frame.kind === "crypto-hello") {
@@ -1128,6 +1427,17 @@ async function receiveFrame(raw) {
   }
   if (frame.kind === "secure") {
     await receiveSecure(frame);
+  }
+}
+
+async function receiveFrameForSession(session, raw) {
+  const frame = JSON.parse(raw);
+  if (frame.kind === "crypto-hello") {
+    await handleHelloForSession(session, frame);
+    return;
+  }
+  if (frame.kind === "secure") {
+    await receiveSecureFromSession(session, frame);
   }
 }
 
@@ -1157,6 +1467,32 @@ async function handleHello(hello) {
   bindConversationToPeer(hello, remoteFingerprint);
   renderSecurity();
   await maybeEstablishSession();
+}
+
+async function handleHelloForSession(session, hello) {
+  const publicKey = await crypto.subtle.importKey(
+    "spki",
+    fromB64(hello.identityKey),
+    { name: "ECDSA", namedCurve: "P-256" },
+    true,
+    ["verify"],
+  );
+  const signatureOk = await crypto.subtle.verify(
+    { name: "ECDSA", hash: "SHA-256" },
+    publicKey,
+    fromB64(hello.signature),
+    utf8(canonical(unsignedHello(hello))),
+  );
+  if (!signatureOk) {
+    setConnection("idle", "Handshake abgelehnt", "Eine Peer-Identity-Signatur ist ungültig.");
+    return;
+  }
+  session.remoteHello = hello;
+  session.remoteIdentityKey = publicKey;
+  session.remoteName = hello.name || session.remoteName || "Peer";
+  session.remoteFingerprint = formatFingerprint(await fingerprint(fromB64(hello.identityKey)));
+  rememberGroupPeer(session);
+  await maybeEstablishPeerSession(session);
 }
 
 async function maybeEstablishSession() {
@@ -1214,6 +1550,66 @@ async function maybeEstablishSession() {
   renderSecurity();
 }
 
+async function maybeEstablishPeerSession(session) {
+  if (!session.localHello || !session.remoteHello || session.sessionKey) return;
+  const remoteEph = await crypto.subtle.importKey(
+    "spki",
+    fromB64(session.remoteHello.ephKey),
+    { name: "ECDH", namedCurve: "P-256" },
+    true,
+    [],
+  );
+  const sharedBits = await crypto.subtle.deriveBits(
+    { name: "ECDH", public: remoteEph },
+    session.localHello.privateEph,
+    256,
+  );
+  const transcript = canonical(
+    [publicHello(session.localHello), session.remoteHello].sort((a, b) =>
+      a.identityKey.localeCompare(b.identityKey),
+    ),
+  );
+  const transcriptHash = await sha256(utf8(transcript));
+  const keyMaterial = await crypto.subtle.importKey("raw", sharedBits, "HKDF", false, ["deriveKey"]);
+  session.sessionKey = await crypto.subtle.deriveKey(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: transcriptHash,
+      info: utf8("lan-secure-chat-v2/aes-gcm"),
+    },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"],
+  );
+  const sasBytes = await sha256(concatBytes(utf8("sas"), transcriptHash, new Uint8Array(sharedBits)));
+  const sessionBytes = await sha256(concatBytes(utf8("session"), transcriptHash));
+  session.sas = digitsFromBytes(sasBytes);
+  session.sessionId = b64url(sessionBytes.slice(0, 16));
+  session.establishedAt = Date.now();
+  state.sessions.set(`${session.chatId}:${session.peerClientId}`, session);
+  if (!state.sessionKey) adoptPeerSessionAsPrimary(session);
+  rememberGroupPeer(session);
+  setConnection("secure", "Gruppensitzung bereit", "Vergleiche den Sicherheitscode und bestätige die Sitzung.");
+  renderReconnectButton();
+  renderSecurity();
+}
+
+function adoptPeerSessionAsPrimary(session) {
+  state.pc = session.pc;
+  state.channel = session.channel;
+  state.localHello = session.localHello;
+  state.remoteHello = session.remoteHello;
+  state.remoteIdentityKey = session.remoteIdentityKey;
+  state.remoteName = session.remoteName;
+  state.sessionKey = session.sessionKey;
+  state.sessionId = session.sessionId;
+  state.sas = session.sas;
+  state.localSasConfirmed = session.localSasConfirmed;
+  state.remoteSasConfirmed = session.remoteSasConfirmed;
+}
+
 async function sendSecure(payload, options = {}) {
   if (!state.sessionKey || state.channel?.readyState !== "open") return;
   const securePayload = await signPayloadIfNeeded(payload);
@@ -1231,6 +1627,36 @@ async function sendSecure(payload, options = {}) {
   if (options.trackAck !== false) {
     trackPending(messageId, frame, options.onFailed);
   }
+}
+
+async function sendSecureToSession(session, payload, options = {}) {
+  if (!session.sessionKey || session.channel?.readyState !== "open") return false;
+  const securePayload = await signPayloadIfNeeded(payload);
+  const messageId = options.messageId || crypto.randomUUID();
+  const seq = ++session.sendSeq;
+  const nonce = randomBytes(12);
+  const header = { kind: "secure", id: messageId, seq, sessionId: session.sessionId, nonce: b64(nonce) };
+  const ciphertext = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: nonce, additionalData: utf8(canonical(header)) },
+    session.sessionKey,
+    utf8(canonical(securePayload)),
+  );
+  sendPlainToSession(session, { ...header, ciphertext: b64(ciphertext) });
+  return true;
+}
+
+async function sendUserPayload(payload, options = {}) {
+  const sessions = verifiedPeerSessions();
+  if (sessions.length > 0) {
+    let sent = 0;
+    for (const session of sessions) {
+      if (await sendSecureToSession(session, payload, { ...options, trackAck: false })) sent += 1;
+    }
+    if (sent > 0 && options.messageId) markMessage(options.messageId, "delivered");
+    return sent > 0;
+  }
+  await sendSecure(payload, options);
+  return Boolean(state.sessionKey);
 }
 
 async function receiveSecure(frame) {
@@ -1275,15 +1701,68 @@ async function receiveSecure(frame) {
   await handlePayload(payload);
 }
 
-async function handlePayload(payload) {
+async function receiveSecureFromSession(session, frame) {
+  if (!session.sessionKey || frame.sessionId !== session.sessionId) return;
+  const header = {
+    kind: frame.kind,
+    id: frame.id,
+    seq: frame.seq,
+    sessionId: frame.sessionId,
+    nonce: frame.nonce,
+  };
+  let payload;
+  try {
+    const plain = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: fromB64(frame.nonce), additionalData: utf8(canonical(header)) },
+      session.sessionKey,
+      fromB64(frame.ciphertext),
+    );
+    payload = JSON.parse(decoder.decode(plain));
+  } catch {
+    setConnection("idle", "Nachricht verworfen", "Eine Gruppen-Nachricht konnte nicht entschlüsselt werden.");
+    return;
+  }
+
+  if (payload.kind === "ack") return;
+
+  if (!(await verifyPayloadSignatureIfNeeded(payload, session))) {
+    setConnection("idle", "Nachricht verworfen", "Sender-Signatur konnte nicht geprüft werden.");
+    return;
+  }
+
+  if (state.seen.has(frame.id)) {
+    await sendSecureToSession(session, { kind: "ack", ackId: frame.id }, { trackAck: false });
+    return;
+  }
+  state.seen.add(frame.id);
+  persistSeenMessageIds();
+  await sendSecureToSession(session, { kind: "ack", ackId: frame.id }, { trackAck: false });
   if (payload.kind === "sas-confirmed") {
-    state.remoteSasConfirmed = true;
+    session.remoteSasConfirmed = true;
+    if (state.remoteHello?.identityKey === session.remoteHello?.identityKey) state.remoteSasConfirmed = true;
     renderSecurity();
     return;
   }
-  if (payload.kind === "chat" && canAcceptUserData()) {
+  await handlePayload(payload, session);
+}
+
+async function handlePayload(payload, session = null) {
+  if (payload.kind === "sas-confirmed") {
+    if (session) {
+      session.remoteSasConfirmed = true;
+      if (state.remoteHello?.identityKey === session.remoteHello?.identityKey) adoptPeerSessionAsPrimary(session);
+    } else {
+      state.remoteSasConfirmed = true;
+    }
+    renderSecurity();
+    return;
+  }
+  const trustedChannel = session ? canUseSession(session) : canAcceptUserData();
+  const chatId = session?.chatId || state.activeChatId;
+  if (payload.kind === "chat" && trustedChannel) {
     addMessage({
       id: payload.id,
+      chatId,
       direction: "in",
       body: payload.body,
       status: "delivered",
@@ -1293,24 +1772,25 @@ async function handlePayload(payload) {
     });
     return;
   }
-  if (payload.kind === "message-edit" && canAcceptUserData()) {
-    applyRemoteMessageEdit(payload);
+  if (payload.kind === "message-edit" && trustedChannel) {
+    applyRemoteMessageEdit(payload, chatId);
     return;
   }
-  if (payload.kind === "message-delete" && canAcceptUserData()) {
-    applyRemoteMessageDelete(payload);
+  if (payload.kind === "message-delete" && trustedChannel) {
+    applyRemoteMessageDelete(payload, chatId);
     return;
   }
-  if (payload.kind === "file-meta" && canAcceptUserData()) {
+  if (payload.kind === "file-meta" && trustedChannel) {
     state.files.set(payload.id, {
       meta: payload,
+      chatId,
       chunks: [],
       received: 0,
     });
     renderTransfers();
     return;
   }
-  if (payload.kind === "file-chunk" && canAcceptUserData()) {
+  if (payload.kind === "file-chunk" && trustedChannel) {
     const file = state.files.get(payload.id);
     if (!file) return;
     const chunk = fromB64(payload.bytes);
@@ -1319,13 +1799,14 @@ async function handlePayload(payload) {
     renderTransfers();
     return;
   }
-  if (payload.kind === "file-end" && canAcceptUserData()) {
+  if (payload.kind === "file-end" && trustedChannel) {
     const file = state.files.get(payload.id);
     if (!file) return;
     const blob = new Blob(file.chunks, { type: file.meta.mime || "application/octet-stream" });
     const url = URL.createObjectURL(blob);
     addMessage({
       id: payload.id,
+      chatId: file.chatId || chatId,
       direction: "in",
       body: "Datei empfangen",
       status: "delivered",
@@ -1349,7 +1830,7 @@ async function handlePayload(payload) {
 async function sendFile(file) {
   const id = crypto.randomUUID();
   addTransfer(id, `Sende ${file.name}`, 0);
-  await sendSecure({
+  await sendUserPayload({
     kind: "file-meta",
     id,
     name: file.name,
@@ -1362,7 +1843,7 @@ async function sendFile(file) {
   while (offset < file.size) {
     const chunk = await file.slice(offset, offset + FILE_CHUNK_SIZE).arrayBuffer();
     await waitForBufferedAmount();
-    await sendSecure({
+    await sendUserPayload({
       kind: "file-chunk",
       id,
       index,
@@ -1372,7 +1853,7 @@ async function sendFile(file) {
     index += 1;
     addTransfer(id, `Sende ${file.name}`, offset / file.size);
   }
-  await sendSecure({ kind: "file-end", id }, { messageId: id });
+  await sendUserPayload({ kind: "file-end", id }, { messageId: id });
   const url = URL.createObjectURL(file);
   addMessage({
     id,
@@ -1426,6 +1907,8 @@ function acknowledge(id) {
 
 function resetSession(clearSignals) {
   for (const pending of state.pending.values()) window.clearTimeout(pending.timer);
+  for (const session of state.peerSessions.values()) resetPeerSession(session);
+  state.peerSessions.clear();
   window.clearTimeout(state.connectionWatch);
   window.clearTimeout(state.wizardCloseTimer);
   state.pending.clear();
@@ -1451,6 +1934,9 @@ function resetSession(clearSignals) {
     flushingOutbox: false,
   });
   state.sessions.delete(state.activeChatId);
+  for (const key of [...state.sessions.keys()]) {
+    if (key.startsWith(`${state.activeChatId}:`)) state.sessions.delete(key);
+  }
   if (clearSignals) {
     els.localSignal.value = "";
     els.remoteSignal.value = "";
@@ -1477,6 +1963,12 @@ function startConnectionWatch() {
 
 function sendPlain(frame) {
   state.channel.send(JSON.stringify(frame));
+}
+
+function sendPlainToSession(session, frame) {
+  if (session.channel?.readyState === "open") {
+    session.channel.send(JSON.stringify(frame));
+  }
 }
 
 async function writeSignal(kind, description) {
@@ -1529,53 +2021,111 @@ async function waitForBufferedAmount() {
   while (state.channel?.bufferedAmount > 256 * 1024) {
     await new Promise((resolve) => window.setTimeout(resolve, 60));
   }
+  for (const session of verifiedPeerSessions()) {
+    while (session.channel?.bufferedAmount > 256 * 1024) {
+      await new Promise((resolve) => window.setTimeout(resolve, 60));
+    }
+  }
 }
 
 function canSendUserData() {
-  return Boolean(state.sessionKey && state.localSasConfirmed && state.remoteSasConfirmed);
+  return Boolean(
+    state.sessionKey &&
+    state.channel?.readyState === "open" &&
+    state.localSasConfirmed &&
+    state.remoteSasConfirmed,
+  ) ||
+    verifiedPeerSessions().length > 0;
 }
 
 function canAcceptUserData() {
   return canSendUserData();
 }
 
+function establishedPeerSessions(chatId = state.activeChatId) {
+  return [...state.peerSessions.values()].filter(
+    (session) => session.sessionKey && session.channel?.readyState === "open" && (!chatId || session.chatId === chatId),
+  );
+}
+
+function canUseSession(session) {
+  return Boolean(
+    session?.sessionKey &&
+    session.localSasConfirmed &&
+    session.remoteSasConfirmed &&
+    session.channel?.readyState === "open",
+  );
+}
+
+function verifiedPeerSessions(chatId = state.activeChatId) {
+  return establishedPeerSessions(chatId).filter(canUseSession);
+}
+
 async function trustRemoteIdentity() {
-  if (!state.remoteHello) return;
+  const peerEntries = establishedPeerSessions()
+    .filter((session) => session.remoteHello)
+    .map((session) => ({
+      identityKey: session.remoteHello.identityKey,
+      name: session.remoteName,
+      fingerprint: session.remoteFingerprint || "",
+    }));
+  if (state.remoteHello) {
+    peerEntries.push({
+      identityKey: state.remoteHello.identityKey,
+      name: state.remoteName,
+      fingerprint: els.remoteFingerprint.textContent,
+    });
+  }
+  if (peerEntries.length === 0) return;
   const trusted = JSON.parse(localStorage.getItem("trustedPeers") || "{}");
-  trusted[state.remoteHello.identityKey] = {
-    name: state.remoteName,
-    fingerprint: els.remoteFingerprint.textContent,
-    trustedAt: new Date().toISOString(),
-  };
+  for (const peer of peerEntries) {
+    trusted[peer.identityKey] = {
+      name: peer.name,
+      fingerprint: peer.fingerprint,
+      trustedAt: new Date().toISOString(),
+    };
+  }
   localStorage.setItem("trustedPeers", JSON.stringify(trusted));
   if (state.conversations[state.activeChatId]) {
     Object.assign(state.conversations[state.activeChatId], {
       trustStatus: "verified",
-      lastVerifiedFingerprint: els.remoteFingerprint.textContent,
-      peerIdentityKey: state.remoteHello.identityKey,
+      lastVerifiedFingerprint: peerEntries[0].fingerprint || els.remoteFingerprint.textContent,
+      peerIdentityKey: peerEntries[0].identityKey,
     });
     persistConversations();
   }
 }
 
 function renderSecurity() {
-  els.sasCode.textContent = state.sas || "------";
-  els.sessionKeyId.textContent = state.sessionId || "keine aktive Session";
-  els.wizardSasCode.textContent = state.sas || "------";
-  els.confirmSas.disabled = !state.sessionKey || state.localSasConfirmed;
-  els.wizardConfirmSas.disabled = !state.sessionKey || state.localSasConfirmed;
+  const established = establishedPeerSessions();
+  const primarySession = established[0] || null;
+  const activeSas = state.sas || primarySession?.sas || "";
+  const activeSessionId = state.sessionId || primarySession?.sessionId || "";
+  const localConfirmed = established.length > 0
+    ? established.every((session) => session.localSasConfirmed)
+    : state.localSasConfirmed;
+  els.sasCode.textContent = activeSas || "------";
+  els.sessionKeyId.textContent = activeSessionId || "keine aktive Session";
+  els.wizardSasCode.textContent = activeSas || "------";
+  renderPeerCodes(established);
+  els.confirmSas.disabled = (!state.sessionKey && established.length === 0) || localConfirmed;
+  els.wizardConfirmSas.disabled = (!state.sessionKey && established.length === 0) || localConfirmed;
   els.messageInput.disabled = !canSendUserData();
   els.sendMessage.disabled = !canSendUserData();
   document.querySelector(".file-button").classList.toggle("disabled", !canSendUserData());
-  els.peerSummary.textContent = state.remoteName
+  const verifiedCount = verifiedPeerSessions().length;
+  const establishedCount = established.length;
+  els.peerSummary.textContent = establishedCount > 1
+    ? `${verifiedCount}/${establishedCount} Geräte verifiziert · Gruppenchat`
+    : state.remoteName
     ? `${state.remoteName} · ${state.sessionId || "Session im Aufbau"}`
     : state.messages.some((message) => message.chatId === state.activeChatId)
       ? "Verlauf geladen · zum Senden neu verbinden"
       : "Noch kein Peer verbunden";
 
-  setCheck(els.checks.identity, !!state.remoteHello, "Identity Key empfangen", "Warte auf Peer-Identity");
-  setCheck(els.checks.signature, !!state.remoteHello, "Identity-Signatur gültig", "Warte auf signierten Handshake");
-  setCheck(els.checks.session, !!state.sessionKey, "Session Key abgeleitet", "Warte auf Session-Key");
+  setCheck(els.checks.identity, !!state.remoteHello || establishedCount > 0, "Identity Key empfangen", "Warte auf Peer-Identity");
+  setCheck(els.checks.signature, !!state.remoteHello || establishedCount > 0, "Identity-Signatur gültig", "Warte auf signierten Handshake");
+  setCheck(els.checks.session, !!state.sessionKey || establishedCount > 0, "Session Key abgeleitet", "Warte auf Session-Key");
   setCheck(
     els.checks.verified,
     canSendUserData(),
@@ -1585,14 +2135,34 @@ function renderSecurity() {
 
   els.securityPill.textContent = canSendUserData()
     ? "Verifiziert"
-    : state.sessionKey
+    : state.sessionKey || establishedCount > 0
       ? "Verschlüsselt, nicht verifiziert"
       : "Nicht verifiziert";
-  els.securityPill.className = `pill ${canSendUserData() ? "verified" : state.sessionKey ? "secure" : ""}`;
+  els.securityPill.className = `pill ${canSendUserData() ? "verified" : state.sessionKey || establishedCount > 0 ? "secure" : ""}`;
   renderChatList();
   flushPendingOutbox();
   maybeAutoCloseWizard();
   updateWizardFromConnection();
+}
+
+function renderPeerCodes(sessions) {
+  const render = (container) => {
+    container.innerHTML = "";
+    container.hidden = sessions.length <= 1;
+    if (sessions.length <= 1) return;
+    for (const session of sessions) {
+      const row = document.createElement("div");
+      row.className = "peer-code-row";
+      const name = document.createElement("span");
+      name.textContent = session.remoteName || "Peer";
+      const code = document.createElement("strong");
+      code.textContent = session.sas || "------";
+      row.append(name, code);
+      container.append(row);
+    }
+  };
+  render(els.peerCodes);
+  render(els.wizardPeerCodes);
 }
 
 function showWizardPage(id, step, subtitle) {
@@ -1607,16 +2177,17 @@ function updateWizardFromConnection() {
   if (!els.connectDialog.open) return;
 
   const securePageVisible = !document.querySelector("#wizard-secure").hidden;
-  if (state.sessionKey && !securePageVisible) {
+  const hasSecureSession = Boolean(state.sessionKey || establishedPeerSessions().length > 0);
+  if (hasSecureSession && !securePageVisible) {
     showWizardPage("wizard-secure", 4, "Verschlüsselter Kanal bereit. Vergleicht den Code.");
     return;
   }
 
-  if (!state.sessionKey) {
-    els.wizardWaitState.textContent = state.pc
+  if (!hasSecureSession) {
+    els.wizardWaitState.textContent = state.pc || state.peerSessions.size > 0
       ? `Warte auf den verschlüsselten Kanal. ${describeCandidateStats()}.`
       : "Noch keine Verbindung gestartet.";
-    els.wizardSecureState.textContent = state.pc
+    els.wizardSecureState.textContent = state.pc || state.peerSessions.size > 0
       ? "Warte auf den verschlüsselten Kanal. Beide Geräte müssen die Codes verarbeitet haben."
       : "Noch keine Verbindung gestartet.";
     return;
@@ -1825,8 +2396,9 @@ function addTransfer(id, label, progress) {
 }
 
 function addMessage(message) {
-  state.messages.push({ ...message, chatId: message.chatId || state.activeChatId });
-  touchConversation(state.activeChatId);
+  const chatId = message.chatId || state.activeChatId;
+  state.messages.push({ ...message, chatId });
+  touchConversation(chatId);
   persistMessages();
   renderChatList();
   renderMessages();
@@ -1841,7 +2413,7 @@ async function editMessageForEveryone(id) {
   message.editedAt = Date.now();
   persistMessages();
   renderMessages();
-  await sendSecure(
+  await sendUserPayload(
     { kind: "message-edit", id, body, editedAt: message.editedAt },
     { trackAck: false },
   );
@@ -1854,7 +2426,7 @@ async function deleteMessageForEveryone(id) {
   markMessageDeleted(message);
   persistMessages();
   renderMessages();
-  await sendSecure(
+  await sendUserPayload(
     { kind: "message-delete", id, deletedAt: Date.now() },
     { trackAck: false },
   );
@@ -1868,11 +2440,11 @@ function deleteMessageForMe(id) {
   renderMessages();
 }
 
-function applyRemoteMessageEdit(payload) {
+function applyRemoteMessageEdit(payload, chatId = state.activeChatId) {
   const message = state.messages.find(
     (entry) =>
       entry.id === payload.id &&
-      entry.chatId === state.activeChatId &&
+      entry.chatId === chatId &&
       entry.direction === "in" &&
       !entry.deleted,
   );
@@ -1883,9 +2455,9 @@ function applyRemoteMessageEdit(payload) {
   renderMessages();
 }
 
-function applyRemoteMessageDelete(payload) {
+function applyRemoteMessageDelete(payload, chatId = state.activeChatId) {
   const message = state.messages.find(
-    (entry) => entry.id === payload.id && entry.chatId === state.activeChatId && entry.direction === "in",
+    (entry) => entry.id === payload.id && entry.chatId === chatId && entry.direction === "in",
   );
   if (!message) return;
   markMessageDeleted(message);
@@ -1909,6 +2481,9 @@ function deleteCurrentChatForMe() {
   state.messages = state.messages.filter((message) => message.chatId !== id);
   delete state.conversations[id];
   state.sessions.delete(id);
+  for (const key of [...state.sessions.keys()]) {
+    if (key.startsWith(`${id}:`)) state.sessions.delete(key);
+  }
   if (state.activeChatId === id) {
     state.activeChatId = visibleConversations()[0]?.id || "default";
     ensureConversation(state.activeChatId, "Aktueller Chat");
@@ -2031,6 +2606,36 @@ function bindConversationToPeer(hello, remoteFingerprint) {
   renderMessages();
 }
 
+function rememberGroupPeer(session) {
+  if (!session.remoteHello) return;
+  const chatId = session.chatId || state.activeChatId;
+  ensureConversation(chatId, "Gruppenchat");
+  const conversation = state.conversations[chatId];
+  const peers = conversation.groupPeers || {};
+  peers[session.remoteHello.identityKey] = {
+    clientId: session.peerClientId,
+    name: session.remoteName || "Peer",
+    fingerprint: session.remoteFingerprint || "",
+    lastSeenAt: Date.now(),
+  };
+  const peerCount = Object.keys(peers).length;
+  const isDraftName = ["Neuer Chat", "Aktueller Chat", "Peer"].includes(conversation.name || "");
+  Object.assign(conversation, {
+    name: peerCount > 1
+      ? "Gruppenchat"
+      : isDraftName
+        ? session.remoteName || "Peer"
+        : conversation.name,
+    group: peerCount > 1,
+    groupPeers: peers,
+    signalingRoomId: state.signaling.roomId || conversation.signalingRoomId,
+    signalingServer: state.signaling.serverUrl || conversation.signalingServer,
+    updatedAt: Date.now(),
+  });
+  persistConversations();
+  renderChatList();
+}
+
 function deleteEmptyDraftConversation(id) {
   if (id === "default") return;
   const hasMessages = state.messages.some((message) => message.chatId === id);
@@ -2119,7 +2724,7 @@ function cleanupAbandonedDraftChat() {
 
 function renderReconnectButton() {
   const conversation = state.conversations[state.activeChatId];
-  const hidden = !conversation?.signalingRoomId || Boolean(state.sessionKey);
+  const hidden = !conversation?.signalingRoomId || canSendUserData();
   els.reconnectChat.hidden = hidden;
   els.mobileReconnectChat.hidden = hidden;
 }
@@ -2153,7 +2758,7 @@ async function flushPendingOutbox() {
   try {
     for (const message of pendingMessages) {
       markMessage(message.id, "pending");
-      await sendSecure(
+      await sendUserPayload(
         { kind: "chat", id: message.id, body: message.body, createdAt: message.createdAt },
         { messageId: message.id },
       );
@@ -2221,9 +2826,10 @@ async function signPayloadIfNeeded(payload) {
   return signed;
 }
 
-async function verifyPayloadSignatureIfNeeded(payload) {
+async function verifyPayloadSignatureIfNeeded(payload, session = null) {
   if (!needsSenderSignature(payload)) return true;
-  if (!payload.senderIdentityKey || !payload.signature || payload.senderIdentityKey !== state.remoteHello?.identityKey) {
+  const expectedIdentity = session?.remoteHello?.identityKey || state.remoteHello?.identityKey;
+  if (!payload.senderIdentityKey || !payload.signature || payload.senderIdentityKey !== expectedIdentity) {
     return false;
   }
   const publicKey = await crypto.subtle.importKey(

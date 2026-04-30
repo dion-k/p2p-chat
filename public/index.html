@@ -122,7 +122,8 @@
         <div class="security-block">
           <span>Sicherheitscode</span>
           <strong id="sas-code" class="sas">------</strong>
-          <p>Vergleicht diesen Code über einen zweiten Kanal. Erst danach wird der Chat freigeschaltet.</p>
+          <div id="peer-codes" class="peer-codes" hidden></div>
+          <p>Vergleicht den Code je verbundenem Gerät. Erst danach wird der Chat freigeschaltet.</p>
           <button id="confirm-sas" class="primary full" disabled>Code stimmt überein</button>
         </div>
 
@@ -279,8 +280,9 @@
         <section id="wizard-secure" class="wizard-page" hidden>
           <div class="wizard-step-label">Letzter Schritt</div>
           <h3>Sicherheitscode vergleichen</h3>
-          <p class="wizard-copy">Der Code muss auf beiden Geräten gleich sein.</p>
+          <p class="wizard-copy">Der Code muss je verbundenem Gerät gleich sein.</p>
           <strong id="wizard-sas-code" class="wizard-sas">------</strong>
+          <div id="wizard-peer-codes" class="peer-codes wizard-peer-codes" hidden></div>
           <button id="wizard-confirm-sas" type="button" class="primary full">Code stimmt überein</button>
           <p id="wizard-secure-state" class="wizard-copy">Warte auf verschlüsselten Kanal.</p>
         </section>
@@ -297,7 +299,7 @@
         </div>
         <label class="field">
           <span>Gerätename</span>
-          <input id="device-name-input" autocomplete="nickname" maxlength="42" required placeholder="z. B. Dions iPhone" />
+          <input id="device-name-input" autocomplete="nickname" maxlength="42" required placeholder="z. B. Arbeits-Laptop" />
         </label>
         <button id="save-device-name" type="button" class="primary full">Weiter</button>
       </form>
@@ -306,6 +308,6 @@
     <script src="./src/vendor/pako.min.js?v=3"></script>
     <script src="./src/vendor/qrcode-generator.js?v=3"></script>
     <script src="./src/vendor/jsQR.js?v=3"></script>
-    <script type="module" src="./src/main.js?v=15"></script>
+    <script type="module" src="./src/main.js?v=17"></script>
   </body>
 </html>

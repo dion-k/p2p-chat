@@ -540,6 +540,36 @@ input:disabled,
   letter-spacing: 0;
 }
 
+.peer-codes {
+  display: grid;
+  gap: 7px;
+}
+
+.peer-code-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.58);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.46);
+}
+
+.peer-code-row span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.peer-code-row strong {
+  color: var(--accent-dark);
+  font-size: 1rem !important;
+}
+
 .checks {
   display: grid;
   gap: 8px;

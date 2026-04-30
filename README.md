@@ -16,9 +16,9 @@ LAN HTTPS:
 python3 serve_https.py
 ```
 
-Open `https://10.93.10.69:4443` from another device on the same LAN.
+Open `https://<your-lan-ip>:4443` from another device on the same LAN.
 
-For another device in the LAN, the app should be served from HTTPS or another browser-secure origin. `localhost` is secure for local testing, but plain `http://192.168.x.x` is not a secure context in normal browsers and can disable Web Crypto. The included dev certificate is self-signed and valid for `10.93.10.69`, `127.0.0.1`, and `localhost`.
+For another device in the LAN, the app should be served from HTTPS or another browser-secure origin. `localhost` is secure for local testing, but plain `http://192.168.x.x` is not a secure context in normal browsers and can disable Web Crypto. The included dev certificate is self-signed and valid for the configured LAN IP, `127.0.0.1`, and `localhost`.
 
 ## Static hosting
 
@@ -136,7 +136,7 @@ Only then are text messages and file transfers enabled.
 - No server relay or offline store-and-forward yet.
 - Some networks still block direct WebRTC despite valid codes, especially guest Wi-Fi, AP/client isolation, VPNs, iCloud Private Relay, and networks blocking UDP/STUN.
 - Manual copy/paste signaling is still available as fallback.
-- Multiple chat histories are persisted. The active WebRTC engine is prepared as `sessions: Map<chatId, Session>`, but full concurrent multi-peer sessions are still the next architecture step.
-- Gruppenchats sind noch kein fertiges Feature. V1 ist für paarweise verschlüsselte Peer-Sessions vorbereitet; echte Gruppenräume mit mehreren gleichzeitigen Empfängern, Sender-Autorität pro Mitglied und Gruppen-Fanout sind noch der nächste größere Schritt.
-- Message history is stored locally in browser storage for V1.
+- Multiple chat histories are persisted. The active WebRTC engine now keeps per-chat peer sessions for the currently connected room.
+- Group chats are V2 pairwise E2E mesh rooms: every participant gets a dedicated WebRTC session, sender payloads are signed with the persistent identity key, and text/file payloads are fanned out to verified peer sessions. A future V3 should add per-member trust UI polish, better per-recipient delivery receipts, and a real group key/MLS-style design.
+- Message history is stored locally in browser storage.
 - Strict networks may block WebRTC. A later HTTPS/WebSocket relay mode should be added for those environments while keeping the same E2E payload encryption.

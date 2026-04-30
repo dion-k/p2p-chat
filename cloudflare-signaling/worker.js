@@ -155,6 +155,7 @@ export class SignalingRoom {
       type: "signal",
       protocol: PROTOCOL,
       clientId: attachment.clientId,
+      targetClientId: cleanId(payload.targetClientId),
       name: attachment.name,
       kind: payload.kind,
       description: payload.description,
@@ -163,7 +164,7 @@ export class SignalingRoom {
     };
 
     await this.storeSignal(outgoing);
-    this.broadcast(ws, outgoing);
+    this.forwardSignal(ws, outgoing);
     this.sendJson(ws, {
       type: "signal-ack",
       protocol: PROTOCOL,
@@ -185,6 +186,7 @@ export class SignalingRoom {
     const signals = await this.readSignals();
     for (const signal of signals) {
       if (signal.clientId === clientId) continue;
+      if (signal.targetClientId && signal.targetClientId !== clientId) continue;
       if (!activePeerIds.has(signal.clientId)) continue;
       this.sendJson(ws, { ...signal, replay: true });
     }
@@ -228,6 +230,16 @@ export class SignalingRoom {
     for (const socket of this.activeSockets()) {
       if (socket === sender) continue;
       if (!socket.deserializeAttachment()?.joined) continue;
+      this.sendJson(socket, payload);
+    }
+  }
+
+  forwardSignal(sender, payload) {
+    for (const socket of this.activeSockets()) {
+      if (socket === sender) continue;
+      const peer = socket.deserializeAttachment();
+      if (!peer?.joined) continue;
+      if (payload.targetClientId && peer.clientId !== payload.targetClientId) continue;
       this.sendJson(socket, payload);
     }
   }
