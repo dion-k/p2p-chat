@@ -7,6 +7,7 @@
     <meta name="theme-color" content="#166a55" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="LAN Chat" />
+    <base href="/" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="apple-touch-icon" href="./icons/icon.svg" />
     <link rel="stylesheet" href="./styles.css" />
@@ -50,6 +51,7 @@
         </div>
 
         <button id="open-wizard" class="primary big-action">Verbinden</button>
+        <button id="reconnect-chat" class="ghost full" hidden>Neu verbinden</button>
         <button id="install-app" class="ghost full" hidden>Als Webapp installieren</button>
         <button id="reset-session" class="ghost full">Trennen</button>
 
@@ -97,6 +99,8 @@
           </div>
           <div class="chat-header-actions">
             <button id="delete-chat" class="ghost danger-action" type="button">Chat löschen</button>
+            <select id="mobile-chat-switch" class="mobile-only chat-switch" aria-label="Chat wechseln"></select>
+            <button id="mobile-reconnect-chat" class="ghost mobile-only" type="button" hidden>Reconnect</button>
             <button id="mobile-settings" class="ghost mobile-only" type="button">Einstellungen</button>
             <div class="pill" id="security-pill">Nicht verifiziert</div>
           </div>
@@ -293,7 +297,7 @@
         </div>
         <label class="field">
           <span>Gerätename</span>
-          <input id="device-name-input" autocomplete="nickname" maxlength="42" placeholder="z. B. Dions iPhone" />
+          <input id="device-name-input" autocomplete="nickname" maxlength="42" required placeholder="z. B. Dions iPhone" />
         </label>
         <button id="save-device-name" type="button" class="primary full">Weiter</button>
       </form>
@@ -302,6 +306,6 @@
     <script src="./src/vendor/pako.min.js?v=3"></script>
     <script src="./src/vendor/qrcode-generator.js?v=3"></script>
     <script src="./src/vendor/jsQR.js?v=3"></script>
-    <script type="module" src="./src/main.js?v=14"></script>
+    <script type="module" src="./src/main.js?v=15"></script>
   </body>
 </html>

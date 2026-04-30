@@ -453,21 +453,68 @@ input:disabled,
 }
 
 .message-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  position: relative;
+  justify-self: end;
   margin-top: 8px;
 }
 
-.message-actions button {
-  padding: 5px 8px;
-  background: #ebe6dd;
+.message-actions summary {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 28px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.58);
   color: var(--ink);
-  font-size: 0.72rem;
+  cursor: pointer;
+  list-style: none;
+  border: 1px solid rgba(255, 255, 255, 0.64);
 }
 
-.message-actions .danger-action {
+.message-actions summary::-webkit-details-marker {
+  display: none;
+}
+
+.message-action-menu {
+  position: absolute;
+  z-index: 3;
+  right: 0;
+  top: calc(100% + 6px);
+  display: grid;
+  gap: 6px;
+  min-width: 150px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 14px 35px rgba(46, 61, 76, 0.14);
+  backdrop-filter: blur(18px) saturate(1.25);
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
+}
+
+.message-action-menu button {
+  padding: 5px 8px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  font-size: 0.72rem;
+  text-align: left;
+}
+
+.message-action-menu .danger-action {
   color: var(--danger);
+}
+
+.chat-switch {
+  min-height: 38px;
+  max-width: 150px;
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.56);
+  color: var(--ink);
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
 }
 
 .message.pending .status {
@@ -921,8 +968,9 @@ pre.file-preview {
   }
 
   .chat-header-actions {
-    display: grid;
-    grid-template-columns: auto auto;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     width: auto;
     align-items: center;
     gap: 8px;
@@ -953,10 +1001,6 @@ pre.file-preview {
     max-width: 88%;
     padding: 9px 11px;
     box-shadow: 0 8px 22px rgba(46, 61, 76, 0.08), var(--inner-glow);
-  }
-
-  .message-actions {
-    display: none;
   }
 
   .composer {
@@ -1009,6 +1053,12 @@ pre.file-preview {
     content: "⚙";
     font-size: 1.05rem;
     line-height: 1;
+  }
+
+  #mobile-reconnect-chat {
+    min-height: 38px;
+    padding: 8px 10px;
+    font-size: 0.78rem;
   }
 }
 

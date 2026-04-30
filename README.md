@@ -67,7 +67,7 @@ The optional Worker lives in `cloudflare-signaling/`. Deploy it separately and p
 1. App öffnen.
 2. Auf Desktop links `Signaling-Server` öffnen. Auf Mobile `Einstellungen` öffnen und dann `Signaling-Server`.
 3. Standardmaessig ist `https://signaling.p2p.di0n.de` eingetragen. Du kannst stattdessen eine eigene Worker-URL eintragen, zum Beispiel `https://lan-secure-chat-signaling.<account>.workers.dev` oder direkt `wss://lan-secure-chat-signaling.<account>.workers.dev`.
-4. `Verbinden` öffnen und eine Einladung starten. Der Invite-Link enthält nur Raum-ID und Server-URL, keine Chatnachrichten oder Schlüssel.
+4. `Verbinden` öffnen und eine Einladung starten. Beim Standardserver wird ein kurzer Link wie `/s/ABCD-EFGH-JK` erzeugt; eigene Server nutzen weiterhin den langen Hash-Invite. Der Link enthält nur Raum-ID und Server-URL, keine Chatnachrichten oder Schlüssel.
 
 ### Cloudflare Signaling deployen
 
@@ -135,6 +135,6 @@ Only then are text messages and file transfers enabled.
 - Some networks still block direct WebRTC despite valid codes, especially guest Wi-Fi, AP/client isolation, VPNs, iCloud Private Relay, and networks blocking UDP/STUN.
 - Manual copy/paste signaling is still available as fallback.
 - Multiple chat histories are persisted. The active WebRTC engine is prepared as `sessions: Map<chatId, Session>`, but full concurrent multi-peer sessions are still the next architecture step.
-- V1 group chat is prepared for pairwise encrypted peer sessions. True concurrent group fan-out and MLS/Sender-Key style group encryption are not complete yet.
+- Gruppenchats sind noch kein fertiges Feature. V1 ist für paarweise verschlüsselte Peer-Sessions vorbereitet; echte Gruppenräume mit mehreren gleichzeitigen Empfängern, Sender-Autorität pro Mitglied und Gruppen-Fanout sind noch der nächste größere Schritt.
 - Message history is stored locally in browser storage for V1.
 - Strict networks may block WebRTC. A later HTTPS/WebSocket relay mode should be added for those environments while keeping the same E2E payload encryption.

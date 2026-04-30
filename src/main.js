@@ -31,6 +31,9 @@ const els = {
   installApp: document.querySelector("#install-app"),
   chatList: document.querySelector("#chat-list"),
   newChat: document.querySelector("#new-chat"),
+  reconnectChat: document.querySelector("#reconnect-chat"),
+  mobileReconnectChat: document.querySelector("#mobile-reconnect-chat"),
+  mobileChatSwitch: document.querySelector("#mobile-chat-switch"),
   openWizard: document.querySelector("#open-wizard"),
   connectDialog: document.querySelector("#connect-dialog"),
   deviceNameDialog: document.querySelector("#device-name-dialog"),
@@ -126,6 +129,7 @@ const state = {
   flushingOutbox: false,
   pendingDraftChatId: "",
   activeChatId: "default",
+  startupInvite: null,
   conversations: {},
   messages: [],
   files: new Map(),
@@ -180,16 +184,13 @@ async function init() {
   state.db = await openDb();
   state.identity = await loadOrCreateIdentity();
   state.localIdentityKey = b64(state.identity.publicKeySpki);
-  els.displayName.value = localStorage.getItem("displayName") || "";
-  if (!els.displayName.value) {
-    els.displayName.value = defaultName();
-  }
-  localStorage.setItem("displayName", els.displayName.value);
+  state.startupInvite = readInviteFromText(location.href);
+  els.displayName.value = localStorage.getItem("displayNameConfirmed") ? (localStorage.getItem("displayName") || "") : "";
   els.signalingServer.value = localStorage.getItem("signalingServer") || DEFAULT_SIGNALING_SERVER;
   localStorage.setItem("signalingServer", normalizeSignalingServer(els.signalingServer.value));
   state.messages = loadMessages();
   state.conversations = loadConversations();
-  state.activeChatId = localStorage.getItem("activeChatId") || Object.keys(state.conversations)[0] || "default";
+  state.activeChatId = pickInitialChatId();
   ensureConversation(state.activeChatId, "Neuer Chat");
   state.seen = new Set(loadSeenMessageIds());
   els.localFingerprint.textContent = formatFingerprint(await fingerprint(state.identity.publicKeySpki));
@@ -199,6 +200,8 @@ async function init() {
   renderSecurity();
   if (!localStorage.getItem("displayNameConfirmed")) {
     window.setTimeout(() => openDeviceNameDialog(), 180);
+  } else if (state.startupInvite) {
+    window.setTimeout(() => acceptStartupInvite(), 250);
   } else if (!localStorage.getItem("hasSeenSetup")) {
     localStorage.setItem("hasSeenSetup", "1");
     window.setTimeout(() => openSetupDialog(), 250);
@@ -221,12 +224,20 @@ els.deviceNameDialog.addEventListener("submit", (event) => {
 });
 
 function saveDeviceName() {
-  const name = els.deviceNameInput.value.trim() || defaultName();
+  const name = els.deviceNameInput.value.trim();
+  if (!name) {
+    els.deviceNameInput.setCustomValidity("Bitte gib einen Namen ein.");
+    els.deviceNameInput.reportValidity();
+    return;
+  }
+  els.deviceNameInput.setCustomValidity("");
   els.displayName.value = name;
   localStorage.setItem("displayName", name);
   localStorage.setItem("displayNameConfirmed", "1");
   if (els.deviceNameDialog.open) els.deviceNameDialog.close();
-  if (!localStorage.getItem("hasSeenSetup")) {
+  if (state.startupInvite) {
+    window.setTimeout(() => acceptStartupInvite(), 120);
+  } else if (!localStorage.getItem("hasSeenSetup")) {
     localStorage.setItem("hasSeenSetup", "1");
     window.setTimeout(() => openSetupDialog(), 120);
   }
@@ -269,6 +280,18 @@ els.acceptSignal.addEventListener("click", async () => {
 
 els.openWizard.addEventListener("click", () => {
   openSetupDialog();
+});
+
+els.reconnectChat.addEventListener("click", async () => {
+  await reconnectCurrentChat();
+});
+
+els.mobileReconnectChat.addEventListener("click", async () => {
+  await reconnectCurrentChat();
+});
+
+els.mobileChatSwitch.addEventListener("change", () => {
+  switchChat(els.mobileChatSwitch.value);
 });
 
 els.connectDialog.addEventListener("close", () => {
@@ -531,6 +554,7 @@ async function processSignalText(value) {
 }
 
 function openSetupDialog() {
+  if (!requireDeviceName()) return;
   state.wizardRole = "";
   const hashInvite = readInviteFromText(location.href);
   if (hashInvite) {
@@ -541,12 +565,24 @@ function openSetupDialog() {
 }
 
 function openDeviceNameDialog() {
-  els.deviceNameInput.value = els.displayName.value || defaultName();
+  els.deviceNameInput.value = "";
+  els.deviceNameInput.setCustomValidity("");
   if (!els.deviceNameDialog.open) els.deviceNameDialog.showModal();
   window.setTimeout(() => els.deviceNameInput.focus(), 50);
 }
 
+function hasDeviceName() {
+  return Boolean(localStorage.getItem("displayNameConfirmed") && els.displayName.value.trim());
+}
+
+function requireDeviceName() {
+  if (hasDeviceName()) return true;
+  openDeviceNameDialog();
+  return false;
+}
+
 async function startSignalingInvite() {
+  if (!requireDeviceName()) return;
   let serverUrl = normalizeSignalingServer(els.signalingServer.value);
   if (!serverUrl) {
     els.signalingServer.value = DEFAULT_SIGNALING_SERVER;
@@ -559,11 +595,12 @@ async function startSignalingInvite() {
   els.wizardShortCode.textContent = formatRoomCode(roomId);
   els.wizardInviteLink.value = invite.link;
   renderQr(els.wizardInviteQr, els.wizardInviteQrNote, invite.link);
-  rememberSignalingRoom(roomId, serverUrl);
+  rememberSignalingRoom(roomId, serverUrl, true);
   await connectSignaling(roomId, serverUrl, true);
 }
 
 async function joinInvite(value) {
+  if (!requireDeviceName()) return;
   const invite = readInviteFromText(value);
   if (!invite) {
     const serverUrl = normalizeSignalingServer(els.signalingServer.value);
@@ -572,6 +609,7 @@ async function joinInvite(value) {
       setConnection("idle", "Invite fehlt", "Füge einen Invite-Link ein oder trage Server plus Code ein.");
       return;
     }
+    rememberSignalingRoom(roomId, serverUrl, false);
     await connectSignaling(roomId, serverUrl, false);
     return;
   }
@@ -581,7 +619,7 @@ async function joinInvite(value) {
   els.wizardShortCode.textContent = formatRoomCode(invite.roomId);
   els.wizardInviteLink.value = invite.link || value;
   renderQr(els.wizardInviteQr, els.wizardInviteQrNote, invite.link || value);
-  rememberSignalingRoom(invite.roomId, invite.serverUrl);
+  rememberSignalingRoom(invite.roomId, invite.serverUrl, false);
   await connectSignaling(invite.roomId, invite.serverUrl, false);
 }
 
@@ -631,12 +669,16 @@ async function connectSignaling(roomId, serverUrl, isOfferer) {
 
   socket.addEventListener("close", () => {
     if (socket !== state.signaling.socket) return;
-    if (!state.sessionKey) setConnection("idle", "Signaling getrennt", "Verlauf bleibt lokal. Zum Senden neu verbinden.");
+    if (!state.sessionKey) {
+      setConnection("idle", "Signaling getrennt", "Verlauf bleibt lokal. Zum Senden neu verbinden.");
+      renderReconnectButton();
+    }
   });
 
   socket.addEventListener("error", () => {
     if (socket !== state.signaling.socket) return;
     setConnection("idle", "Signaling nicht erreichbar", "Prüfe WebSocket-URL oder nutze Erweitert für manuelle Codes.");
+    renderReconnectButton();
   });
 }
 
@@ -814,6 +856,7 @@ function buildSignalingSocketUrl(serverUrl, roomId, clientId) {
 }
 
 function createInvite(roomId, serverUrl) {
+  const isDefaultServer = normalizeSignalingServer(serverUrl) === normalizeSignalingServer(DEFAULT_SIGNALING_SERVER);
   const payload = {
     v: 1,
     roomId,
@@ -821,6 +864,10 @@ function createInvite(roomId, serverUrl) {
     exp: Date.now() + SIGNALING_ROOM_TTL_MS,
   };
   const url = new URL(location.href);
+  if (isDefaultServer) {
+    const shortUrl = new URL(`/s/${formatRoomCode(roomId).replaceAll(" ", "-")}`, location.origin);
+    return { ...payload, link: shortUrl.toString() };
+  }
   url.hash = `invite=${b64url(utf8(JSON.stringify(payload)))}`;
   return { ...payload, link: url.toString() };
 }
@@ -828,9 +875,30 @@ function createInvite(roomId, serverUrl) {
 function readInviteFromText(value) {
   const text = value.trim();
   if (!text) return null;
+  const directCode = normalizeRoomCode(text);
+  if (directCode.length >= 6 && directCode.length <= 32 && !text.includes("/") && !text.includes("#")) {
+    return {
+      v: 1,
+      roomId: directCode,
+      serverUrl: normalizeSignalingServer(DEFAULT_SIGNALING_SERVER),
+      link: text,
+    };
+  }
   try {
     const url = new URL(text, location.href);
-    const encoded = new URLSearchParams(url.hash.replace(/^#/, "")).get("invite");
+    const params = new URLSearchParams(url.hash.replace(/^#/, ""));
+    const shortHash = params.get("s");
+    const pathMatch = url.pathname.match(/^\/s\/(.+)$/i);
+    const shortCode = normalizeRoomCode(shortHash || pathMatch?.[1] || "");
+    if (shortCode) {
+      return {
+        v: 1,
+        roomId: shortCode,
+        serverUrl: normalizeSignalingServer(DEFAULT_SIGNALING_SERVER),
+        link: url.toString(),
+      };
+    }
+    const encoded = params.get("invite");
     if (!encoded) return null;
     const invite = JSON.parse(decoder.decode(fromB64url(encoded)));
     if (invite.v !== 1 || !invite.roomId || !invite.serverUrl) return null;
@@ -843,6 +911,21 @@ function readInviteFromText(value) {
   } catch {
     return null;
   }
+}
+
+async function acceptStartupInvite() {
+  if (!state.startupInvite || !requireDeviceName()) return;
+  localStorage.setItem("hasSeenSetup", "1");
+  showWizardPage("wizard-wait", 4, "Invite erkannt. Verbindung wird automatisch aufgebaut.");
+  if (!els.connectDialog.open) els.connectDialog.showModal();
+  const invite = state.startupInvite;
+  state.startupInvite = null;
+  els.wizardInviteInput.value = invite.link || location.href;
+  els.wizardShortCode.textContent = formatRoomCode(invite.roomId);
+  els.wizardInviteLink.value = invite.link || location.href;
+  renderQr(els.wizardInviteQr, els.wizardInviteQrNote, invite.link || location.href);
+  rememberSignalingRoom(invite.roomId, invite.serverUrl, false);
+  await connectSignaling(invite.roomId, invite.serverUrl, false);
 }
 
 function shortRoomId() {
@@ -861,23 +944,42 @@ function formatRoomCode(value) {
   return normalizeRoomCode(value).replace(/(.{4})/g, "$1 ").trim() || "------";
 }
 
-function rememberSignalingRoom(roomId, serverUrl) {
+function rememberSignalingRoom(roomId, serverUrl, isOfferer = null) {
   ensureConversation(state.activeChatId, "Neuer Chat");
   Object.assign(state.conversations[state.activeChatId], {
     signalingRoomId: roomId,
     signalingServer: serverUrl,
+    signalingIsOfferer: isOfferer,
     signalingUpdatedAt: Date.now(),
   });
   persistConversations();
 }
 
 async function autoReconnectKnownChat() {
+  if (!hasDeviceName()) return;
   const conversation = state.conversations[state.activeChatId];
   const serverUrl = normalizeSignalingServer(els.signalingServer.value || conversation?.signalingServer || "");
   if (!conversation?.signalingRoomId || !serverUrl || state.sessionKey || state.signaling.socket) return;
-  const isOfferer = !conversation.peerIdentityKey || state.localIdentityKey < conversation.peerIdentityKey;
+  const isOfferer = reconnectRole(conversation);
   setConnection("connecting", "Reconnect", "Bekannten Chat über Signaling neu aufbauen.");
   await connectSignaling(conversation.signalingRoomId, serverUrl, isOfferer);
+}
+
+async function reconnectCurrentChat() {
+  if (!requireDeviceName()) return;
+  const conversation = state.conversations[state.activeChatId];
+  const serverUrl = normalizeSignalingServer(conversation?.signalingServer || els.signalingServer.value || DEFAULT_SIGNALING_SERVER);
+  if (!conversation?.signalingRoomId || !serverUrl) {
+    openSetupDialog();
+    return;
+  }
+  setConnection("connecting", "Reconnect", "Verbinde den bekannten Chat neu.");
+  await connectSignaling(conversation.signalingRoomId, serverUrl, reconnectRole(conversation));
+}
+
+function reconnectRole(conversation) {
+  if (typeof conversation?.signalingIsOfferer === "boolean") return conversation.signalingIsOfferer;
+  return !conversation?.peerIdentityKey || state.localIdentityKey < conversation.peerIdentityKey;
 }
 
 els.copyLocal.addEventListener("click", async () => {
@@ -1108,6 +1210,7 @@ async function maybeEstablishSession() {
   window.clearTimeout(state.connectionWatch);
   state.connectionWatch = null;
   setConnection("secure", "Verschlüsselte Sitzung bereit", "Vergleiche den Sicherheitscode vor der ersten Nachricht.");
+  renderReconnectButton();
   renderSecurity();
 }
 
@@ -1354,6 +1457,7 @@ function resetSession(clearSignals) {
   }
   els.remoteFingerprint.textContent = "unbekannt";
   setConnection("idle", "Nicht verbunden", "Erstelle eine Einladung oder füge eine Einladung ein.");
+  renderReconnectButton();
   renderSecurity();
 }
 
@@ -1590,9 +1694,17 @@ function renderMessages() {
 }
 
 function renderMessageActions(message) {
+  const menu = document.createElement("details");
+  menu.className = "message-actions";
+  if (message.deleted) return menu;
+
+  const summary = document.createElement("summary");
+  summary.setAttribute("aria-label", "Nachrichtenaktionen");
+  summary.textContent = "⋯";
+  menu.append(summary);
+
   const actions = document.createElement("div");
-  actions.className = "message-actions";
-  if (message.deleted) return actions;
+  actions.className = "message-action-menu";
 
   if (message.direction === "out" && !message.file) {
     const edit = document.createElement("button");
@@ -1618,7 +1730,8 @@ function renderMessageActions(message) {
   deleteLocal.textContent = "Nur hier löschen";
   deleteLocal.addEventListener("click", () => deleteMessageForMe(message.id));
   actions.append(deleteLocal);
-  return actions;
+  menu.append(actions);
+  return menu;
 }
 
 function renderTransfers() {
@@ -1797,7 +1910,7 @@ function deleteCurrentChatForMe() {
   delete state.conversations[id];
   state.sessions.delete(id);
   if (state.activeChatId === id) {
-    state.activeChatId = Object.keys(state.conversations)[0] || "default";
+    state.activeChatId = visibleConversations()[0]?.id || "default";
     ensureConversation(state.activeChatId, "Aktueller Chat");
   }
   persistMessages();
@@ -1854,6 +1967,12 @@ function loadConversations() {
       updatedAt: Date.now(),
     },
   };
+}
+
+function pickInitialChatId() {
+  const saved = localStorage.getItem("activeChatId");
+  if (saved && state.conversations[saved] && !isEmptyDraftConversation(saved)) return saved;
+  return visibleConversations()[0]?.id || "default";
 }
 
 function persistConversations() {
@@ -1937,9 +2056,9 @@ function switchChat(id) {
 
 function renderChatList() {
   els.chatList.innerHTML = "";
-  const conversations = Object.values(state.conversations)
-    .filter((conversation) => !isEmptyDraftConversation(conversation.id))
-    .sort((a, b) => b.updatedAt - a.updatedAt);
+  els.mobileChatSwitch.innerHTML = "";
+  const conversations = visibleConversations();
+  els.mobileChatSwitch.hidden = conversations.length <= 1;
   for (const conversation of conversations) {
     const button = document.createElement("button");
     button.type = "button";
@@ -1955,13 +2074,28 @@ function renderChatList() {
           : "leer";
     button.addEventListener("click", () => switchChat(conversation.id));
     els.chatList.append(button);
+
+    const option = document.createElement("option");
+    option.value = conversation.id;
+    option.textContent = conversation.name || "Chat";
+    option.selected = conversation.id === state.activeChatId;
+    els.mobileChatSwitch.append(option);
   }
+  renderReconnectButton();
+}
+
+function visibleConversations() {
+  return Object.values(state.conversations)
+    .filter((conversation) => !isEmptyDraftConversation(conversation.id))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 function isEmptyDraftConversation(id) {
-  return id !== "default" &&
-    state.conversations[id]?.name === "Neuer Chat" &&
-    !state.conversations[id]?.peerIdentityKey &&
+  const conversation = state.conversations[id];
+  return Boolean(conversation) &&
+    (id === "default" || conversation.name === "Neuer Chat" || conversation.name === "Aktueller Chat") &&
+    !conversation.peerIdentityKey &&
+    !conversation.signalingRoomId &&
     !state.messages.some((message) => message.chatId === id);
 }
 
@@ -1973,7 +2107,7 @@ function cleanupAbandonedDraftChat() {
   }
   delete state.conversations[id];
   if (state.activeChatId === id) {
-    state.activeChatId = Object.keys(state.conversations)[0] || "default";
+    state.activeChatId = visibleConversations()[0]?.id || "default";
     ensureConversation(state.activeChatId, "Aktueller Chat");
   }
   state.pendingDraftChatId = "";
@@ -1981,6 +2115,13 @@ function cleanupAbandonedDraftChat() {
   renderChatList();
   renderMessages();
   renderSecurity();
+}
+
+function renderReconnectButton() {
+  const conversation = state.conversations[state.activeChatId];
+  const hidden = !conversation?.signalingRoomId || Boolean(state.sessionKey);
+  els.reconnectChat.hidden = hidden;
+  els.mobileReconnectChat.hidden = hidden;
 }
 
 function loadSeenMessageIds() {
