@@ -1,4 +1,4 @@
-const CACHE_NAME = "p2p-chat-v18";
+const CACHE_NAME = "p2p-chat-v19";
 const ASSETS = [
   "./",
   "./index.html",

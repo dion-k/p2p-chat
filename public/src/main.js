@@ -112,6 +112,8 @@ const MAX_RETRIES = 6;
 const FILE_CHUNK_SIZE = 16 * 1024;
 const ICE_GATHER_TIMEOUT_MS = 10000;
 const CONNECTION_TIMEOUT_MS = 35000;
+const HEARTBEAT_INTERVAL_MS = 3000;
+const HEARTBEAT_TIMEOUT_MS = 9000;
 const SIGNALING_PROTOCOL = "lan-secure-chat-signal-v1";
 const SIGNALING_ROOM_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_SIGNALING_SERVER = "https://signaling.p2p.di0n.de";
@@ -137,7 +139,11 @@ const state = {
   localSasConfirmed: false,
   remoteSasConfirmed: false,
   pending: new Map(),
+  deliveryGroups: new Map(),
   seen: new Set(),
+  lastFrameAt: 0,
+  heartbeatTimer: null,
+  disconnected: false,
   flushingOutbox: false,
   pendingDraftChatId: "",
   activeChatId: "default",
@@ -841,6 +847,9 @@ function ensurePeerSession(peerClientId, name = "") {
     offerInFlight: false,
     files: new Map(),
     establishedAt: 0,
+    lastFrameAt: 0,
+    heartbeatTimer: null,
+    disconnected: false,
   };
   state.peerSessions.set(peerClientId, session);
   return session;
@@ -848,6 +857,7 @@ function ensurePeerSession(peerClientId, name = "") {
 
 function resetPeerSession(session) {
   for (const pending of session.pending.values()) window.clearTimeout(pending.timer);
+  window.clearInterval(session.heartbeatTimer);
   session.pending.clear();
   session.pc?.close();
   Object.assign(session, {
@@ -865,6 +875,9 @@ function resetPeerSession(session) {
     pendingCandidates: [],
     files: new Map(),
     establishedAt: 0,
+    lastFrameAt: 0,
+    heartbeatTimer: null,
+    disconnected: false,
   });
 }
 
@@ -925,7 +938,9 @@ function setupPeerConnectionForSession(session, isOfferer) {
   });
   session.pc.addEventListener("connectionstatechange", () => {
     state.diag.lastPeerState = session.pc.connectionState;
-    if (["failed", "disconnected"].includes(session.pc.connectionState)) renderReconnectButton();
+    if (["failed", "disconnected", "closed"].includes(session.pc.connectionState)) {
+      markPeerSessionDisconnected(session, "Peer-Verbindung unterbrochen");
+    }
   });
   if (isOfferer) {
     session.channel = session.pc.createDataChannel("lan-secure-chat-v2", { ordered: true });
@@ -941,12 +956,19 @@ function setupPeerConnectionForSession(session, isOfferer) {
 function configurePeerChannel(session) {
   session.channel.binaryType = "arraybuffer";
   session.channel.addEventListener("open", async () => {
+    session.disconnected = false;
+    session.lastFrameAt = Date.now();
     await sendHelloToSession(session);
   });
-  session.channel.addEventListener("message", (event) => receiveFrameForSession(session, event.data));
+  session.channel.addEventListener("message", (event) => {
+    session.lastFrameAt = Date.now();
+    receiveFrameForSession(session, event.data);
+  });
   session.channel.addEventListener("close", () => {
-    renderReconnectButton();
-    renderSecurity();
+    markPeerSessionDisconnected(session, "Datenkanal geschlossen");
+  });
+  session.channel.addEventListener("error", () => {
+    markPeerSessionDisconnected(session, "Datenkanal-Fehler");
   });
 }
 
@@ -1363,8 +1385,7 @@ function setupPeerConnection(isOfferer) {
     state.diag.lastPeerState = status;
     if (status === "connected") setConnection("connecting", "P2P verbunden", "Starte kryptografischen Handshake.");
     if (["failed", "disconnected", "closed"].includes(status)) {
-      setConnection("idle", "Verbindung unterbrochen", buildConnectionFailureText());
-      renderMessages();
+      markLegacySessionDisconnected(buildConnectionFailureText());
     }
     updateWizardFromConnection();
   });
@@ -1395,13 +1416,20 @@ function configureChannel() {
   state.channel.binaryType = "arraybuffer";
   state.channel.addEventListener("open", async () => {
     state.diag.channelOpen = true;
+    state.disconnected = false;
+    state.lastFrameAt = Date.now();
     setConnection("connecting", "Datenkanal offen", "Tausche signierte Session-Keys aus.");
     await sendHello();
   });
-  state.channel.addEventListener("message", (event) => receiveFrame(event.data));
+  state.channel.addEventListener("message", (event) => {
+    state.lastFrameAt = Date.now();
+    receiveFrame(event.data);
+  });
   state.channel.addEventListener("close", () => {
-    setConnection("idle", "Datenkanal geschlossen", "Erstelle bei Bedarf eine neue Einladung.");
-    renderSecurity();
+    markLegacySessionDisconnected("Datenkanal geschlossen");
+  });
+  state.channel.addEventListener("error", () => {
+    markLegacySessionDisconnected("Datenkanal-Fehler");
   });
 }
 
@@ -1577,6 +1605,7 @@ async function maybeEstablishSession() {
   });
   window.clearTimeout(state.connectionWatch);
   state.connectionWatch = null;
+  startLegacyHeartbeat();
   setConnection("secure", "Verschlüsselte Sitzung bereit", "Vergleiche den Sicherheitscode vor der ersten Nachricht.");
   renderReconnectButton();
   renderSecurity();
@@ -1620,8 +1649,11 @@ async function maybeEstablishPeerSession(session) {
   session.sas = digitsFromBytes(sasBytes);
   session.sessionId = b64url(sessionBytes.slice(0, 16));
   session.establishedAt = Date.now();
+  session.disconnected = false;
+  session.lastFrameAt = Date.now();
   state.sessions.set(`${session.chatId}:${session.peerClientId}`, session);
   if (!state.sessionKey) adoptPeerSessionAsPrimary(session);
+  startPeerHeartbeat(session);
   rememberGroupPeer(session);
   setConnection("secure", "Gruppensitzung bereit", "Vergleiche den Sicherheitscode und bestätige die Sitzung.");
   renderReconnectButton();
@@ -1640,10 +1672,20 @@ function adoptPeerSessionAsPrimary(session) {
   state.sas = session.sas;
   state.localSasConfirmed = session.localSasConfirmed;
   state.remoteSasConfirmed = session.remoteSasConfirmed;
+  state.disconnected = session.disconnected;
+  state.lastFrameAt = session.lastFrameAt;
 }
 
 async function sendSecure(payload, options = {}) {
-  if (!state.sessionKey || state.channel?.readyState !== "open") return;
+  if (
+    !state.sessionKey ||
+    state.channel?.readyState !== "open" ||
+    state.disconnected ||
+    (state.lastFrameAt && Date.now() - state.lastFrameAt > HEARTBEAT_TIMEOUT_MS)
+  ) {
+    if (options.messageId) markMessage(options.messageId, "failed");
+    return;
+  }
   const securePayload = await signPayloadIfNeeded(payload);
   const messageId = options.messageId || crypto.randomUUID();
   const seq = ++state.sendSeq;
@@ -1662,7 +1704,7 @@ async function sendSecure(payload, options = {}) {
 }
 
 async function sendSecureToSession(session, payload, options = {}) {
-  if (!session.sessionKey || session.channel?.readyState !== "open") return false;
+  if (!canTransmitToSession(session)) return false;
   const securePayload = await signPayloadIfNeeded(payload);
   const messageId = options.messageId || crypto.randomUUID();
   const seq = ++session.sendSeq;
@@ -1673,18 +1715,29 @@ async function sendSecureToSession(session, payload, options = {}) {
     session.sessionKey,
     utf8(canonical(securePayload)),
   );
-  sendPlainToSession(session, { ...header, ciphertext: b64(ciphertext) });
+  const frame = { ...header, ciphertext: b64(ciphertext) };
+  sendPlainToSession(session, frame);
+  if (options.trackAck !== false) {
+    trackSessionPending(session, messageId, frame, options.onFailed);
+  }
   return true;
 }
 
 async function sendUserPayload(payload, options = {}) {
   const sessions = verifiedPeerSessions();
   if (sessions.length > 0) {
+    const messageId = options.messageId || crypto.randomUUID();
+    if (options.trackAck !== false && options.messageId) {
+      state.deliveryGroups.set(messageId, {
+        remaining: new Set(sessions.map((session) => session.peerClientId)),
+        failed: false,
+      });
+    }
     let sent = 0;
     for (const session of sessions) {
-      if (await sendSecureToSession(session, payload, { ...options, trackAck: false })) sent += 1;
+      if (await sendSecureToSession(session, payload, { ...options, messageId })) sent += 1;
     }
-    if (sent > 0 && options.messageId) markMessage(options.messageId, "delivered");
+    if (sent < sessions.length && options.messageId) markMessage(options.messageId, "failed");
     return sent > 0;
   }
   await sendSecure(payload, options);
@@ -1693,6 +1746,7 @@ async function sendUserPayload(payload, options = {}) {
 
 async function receiveSecure(frame) {
   if (!state.sessionKey || frame.sessionId !== state.sessionId) return;
+  state.lastFrameAt = Date.now();
   const header = {
     kind: frame.kind,
     id: frame.id,
@@ -1718,6 +1772,13 @@ async function receiveSecure(frame) {
     return;
   }
 
+  if (payload.kind === "heartbeat-ping") {
+    await sendSecure({ kind: "heartbeat-pong", at: Date.now() }, { trackAck: false });
+    return;
+  }
+
+  if (payload.kind === "heartbeat-pong") return;
+
   if (!(await verifyPayloadSignatureIfNeeded(payload))) {
     setConnection("idle", "Nachricht verworfen", "Sender-Signatur konnte nicht geprüft werden.");
     return;
@@ -1735,6 +1796,12 @@ async function receiveSecure(frame) {
 
 async function receiveSecureFromSession(session, frame) {
   if (!session.sessionKey || frame.sessionId !== session.sessionId) return;
+  session.lastFrameAt = Date.now();
+  session.disconnected = false;
+  if (state.channel === session.channel) {
+    state.lastFrameAt = session.lastFrameAt;
+    state.disconnected = false;
+  }
   const header = {
     kind: frame.kind,
     id: frame.id,
@@ -1755,7 +1822,17 @@ async function receiveSecureFromSession(session, frame) {
     return;
   }
 
-  if (payload.kind === "ack") return;
+  if (payload.kind === "ack") {
+    acknowledgeSession(session, payload.ackId);
+    return;
+  }
+
+  if (payload.kind === "heartbeat-ping") {
+    await sendSecureToSession(session, { kind: "heartbeat-pong", at: Date.now() }, { trackAck: false });
+    return;
+  }
+
+  if (payload.kind === "heartbeat-pong") return;
 
   if (!(await verifyPayloadSignatureIfNeeded(payload, session))) {
     setConnection("idle", "Nachricht verworfen", "Sender-Signatur konnte nicht geprüft werden.");
@@ -1922,10 +1999,48 @@ function trackPending(id, frame, onFailed) {
       onFailed?.();
       return;
     }
-    if (state.channel?.readyState === "open") sendPlain(frame);
-    pending.timer = window.setTimeout(retry, ACK_TIMEOUT_MS * pending.attempts);
+    if (
+      state.channel?.readyState === "open" &&
+      !state.disconnected &&
+      (!state.lastFrameAt || Date.now() - state.lastFrameAt <= HEARTBEAT_TIMEOUT_MS)
+    ) {
+      sendPlain(frame);
+      pending.timer = window.setTimeout(retry, ACK_TIMEOUT_MS * pending.attempts);
+      return;
+    }
+    state.pending.delete(id);
+    markMessage(id, "failed");
+    onFailed?.();
   };
   state.pending.set(id, pending);
+  pending.timer = window.setTimeout(retry, ACK_TIMEOUT_MS);
+}
+
+function trackSessionPending(session, id, frame, onFailed) {
+  const pending = {
+    frame,
+    attempts: 0,
+    timer: null,
+    onFailed,
+  };
+  const retry = () => {
+    if (!session.pending.has(id)) return;
+    pending.attempts += 1;
+    if (pending.attempts > MAX_RETRIES) {
+      failSessionPending(session, id);
+      onFailed?.();
+      return;
+    }
+    if (canTransmitToSession(session)) {
+      sendPlainToSession(session, frame);
+    } else {
+      failSessionPending(session, id);
+      onFailed?.();
+      return;
+    }
+    pending.timer = window.setTimeout(retry, ACK_TIMEOUT_MS * pending.attempts);
+  };
+  session.pending.set(id, pending);
   pending.timer = window.setTimeout(retry, ACK_TIMEOUT_MS);
 }
 
@@ -1937,12 +2052,46 @@ function acknowledge(id) {
   markMessage(id, "delivered");
 }
 
+function acknowledgeSession(session, id) {
+  const pending = session.pending.get(id);
+  if (pending) {
+    window.clearTimeout(pending.timer);
+    session.pending.delete(id);
+  }
+  const group = state.deliveryGroups.get(id);
+  if (!group) {
+    markMessage(id, "delivered");
+    return;
+  }
+  group.remaining.delete(session.peerClientId);
+  if (group.remaining.size === 0 && !group.failed) {
+    state.deliveryGroups.delete(id);
+    markMessage(id, "delivered");
+  }
+}
+
+function failSessionPending(session, id) {
+  const pending = session.pending.get(id);
+  if (pending) {
+    window.clearTimeout(pending.timer);
+    session.pending.delete(id);
+  }
+  const group = state.deliveryGroups.get(id);
+  if (group) {
+    group.failed = true;
+    state.deliveryGroups.delete(id);
+  }
+  markMessage(id, "failed");
+}
+
 function resetSession(clearSignals) {
   for (const pending of state.pending.values()) window.clearTimeout(pending.timer);
   for (const session of state.peerSessions.values()) resetPeerSession(session);
   state.peerSessions.clear();
+  state.deliveryGroups.clear();
   window.clearTimeout(state.connectionWatch);
   window.clearTimeout(state.wizardCloseTimer);
+  window.clearInterval(state.heartbeatTimer);
   state.pending.clear();
   if (clearSignals) closeSignaling();
   state.pc?.close();
@@ -1963,6 +2112,9 @@ function resetSession(clearSignals) {
     files: new Map(),
     connectionWatch: null,
     wizardCloseTimer: null,
+    heartbeatTimer: null,
+    lastFrameAt: 0,
+    disconnected: false,
     flushingOutbox: false,
   });
   state.sessions.delete(state.activeChatId);
@@ -2001,6 +2153,82 @@ function sendPlainToSession(session, frame) {
   if (session.channel?.readyState === "open") {
     session.channel.send(JSON.stringify(frame));
   }
+}
+
+function canTransmitToSession(session) {
+  return Boolean(
+    session?.sessionKey &&
+    session.channel?.readyState === "open" &&
+    !session.disconnected &&
+    (!session.lastFrameAt || Date.now() - session.lastFrameAt <= HEARTBEAT_TIMEOUT_MS),
+  );
+}
+
+function startPeerHeartbeat(session) {
+  window.clearInterval(session.heartbeatTimer);
+  session.heartbeatTimer = window.setInterval(async () => {
+    if (!session.sessionKey) return;
+    if (session.channel?.readyState !== "open") {
+      markPeerSessionDisconnected(session, "Datenkanal geschlossen");
+      return;
+    }
+    if (Date.now() - session.lastFrameAt > HEARTBEAT_TIMEOUT_MS) {
+      markPeerSessionDisconnected(session, "Peer antwortet nicht");
+      return;
+    }
+    await sendSecureToSession(session, { kind: "heartbeat-ping", at: Date.now() }, { trackAck: false });
+  }, HEARTBEAT_INTERVAL_MS);
+}
+
+function startLegacyHeartbeat() {
+  window.clearInterval(state.heartbeatTimer);
+  state.lastFrameAt = Date.now();
+  state.disconnected = false;
+  state.heartbeatTimer = window.setInterval(async () => {
+    if (!state.sessionKey) return;
+    if (state.channel?.readyState !== "open") {
+      markLegacySessionDisconnected("Datenkanal geschlossen");
+      return;
+    }
+    if (Date.now() - state.lastFrameAt > HEARTBEAT_TIMEOUT_MS) {
+      markLegacySessionDisconnected("Peer antwortet nicht");
+      return;
+    }
+    await sendSecure({ kind: "heartbeat-ping", at: Date.now() }, { trackAck: false });
+  }, HEARTBEAT_INTERVAL_MS);
+}
+
+function markPeerSessionDisconnected(session, detail) {
+  if (session.disconnected) return;
+  session.disconnected = true;
+  if (state.channel === session.channel) {
+    state.disconnected = true;
+    state.lastFrameAt = session.lastFrameAt;
+  }
+  window.clearInterval(session.heartbeatTimer);
+  session.heartbeatTimer = null;
+  for (const id of [...session.pending.keys()]) failSessionPending(session, id);
+  setConnection("idle", "Verbindung unterbrochen", `${detail}. Nutze Neu verbinden.`);
+  renderReconnectButton();
+  renderSecurity();
+  renderMessages();
+}
+
+function markLegacySessionDisconnected(detail) {
+  if (state.disconnected) return;
+  state.disconnected = true;
+  window.clearInterval(state.heartbeatTimer);
+  state.heartbeatTimer = null;
+  for (const id of [...state.pending.keys()]) {
+    const pending = state.pending.get(id);
+    if (pending) window.clearTimeout(pending.timer);
+    state.pending.delete(id);
+    markMessage(id, "failed");
+  }
+  setConnection("idle", "Verbindung unterbrochen", `${detail}. Nutze Neu verbinden.`);
+  renderReconnectButton();
+  renderSecurity();
+  renderMessages();
 }
 
 async function writeSignal(kind, description) {
@@ -2064,6 +2292,8 @@ function canSendUserData() {
   return Boolean(
     state.sessionKey &&
     state.channel?.readyState === "open" &&
+    !state.disconnected &&
+    (!state.lastFrameAt || Date.now() - state.lastFrameAt <= HEARTBEAT_TIMEOUT_MS) &&
     state.localSasConfirmed &&
     state.remoteSasConfirmed,
   ) ||
@@ -2076,7 +2306,7 @@ function canAcceptUserData() {
 
 function establishedPeerSessions(chatId = state.activeChatId) {
   return [...state.peerSessions.values()].filter(
-    (session) => session.sessionKey && session.channel?.readyState === "open" && (!chatId || session.chatId === chatId),
+    (session) => session.sessionKey && canTransmitToSession(session) && (!chatId || session.chatId === chatId),
   );
 }
 
@@ -2085,7 +2315,7 @@ function canUseSession(session) {
     session?.sessionKey &&
     session.localSasConfirmed &&
     session.remoteSasConfirmed &&
-    session.channel?.readyState === "open",
+    canTransmitToSession(session),
   );
 }
 
