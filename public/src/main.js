@@ -27,6 +27,14 @@ const els = {
   chatSasCode: document.querySelector("#chat-sas-code"),
   chatPeerCodes: document.querySelector("#chat-peer-codes"),
   chatConfirmSas: document.querySelector("#chat-confirm-sas"),
+  groupPanel: document.querySelector("#group-panel"),
+  groupState: document.querySelector("#group-state"),
+  groupStart: document.querySelector("#group-start"),
+  groupHostTools: document.querySelector("#group-host-tools"),
+  groupInviteLink: document.querySelector("#group-invite-link"),
+  copyGroupInvite: document.querySelector("#copy-group-invite"),
+  refreshGroupInvite: document.querySelector("#refresh-group-invite"),
+  groupParticipants: document.querySelector("#group-participants"),
   sasCode: document.querySelector("#sas-code"),
   peerCodes: document.querySelector("#peer-codes"),
   sessionKeyId: document.querySelector("#session-key-id"),
@@ -41,8 +49,10 @@ const els = {
   installApp: document.querySelector("#install-app"),
   chatList: document.querySelector("#chat-list"),
   newChat: document.querySelector("#new-chat"),
+  newGroup: document.querySelector("#new-group"),
   reconnectChat: document.querySelector("#reconnect-chat"),
   mobileReconnectChat: document.querySelector("#mobile-reconnect-chat"),
+  mobileNewGroup: document.querySelector("#mobile-new-group"),
   mobileChatSwitch: document.querySelector("#mobile-chat-switch"),
   openWizard: document.querySelector("#open-wizard"),
   connectDialog: document.querySelector("#connect-dialog"),
@@ -294,6 +304,24 @@ els.newChat.addEventListener("click", () => {
   switchChat(id);
   resetSession(true);
   openSetupDialog();
+});
+
+els.newGroup.addEventListener("click", async () => {
+  await createGroupChat();
+});
+
+els.mobileNewGroup.addEventListener("click", async () => {
+  await createGroupChat();
+});
+
+els.groupStart.addEventListener("click", async () => {
+  await startGroupConversation();
+});
+
+els.copyGroupInvite.addEventListener("click", () => copyText(els.groupInviteLink));
+
+els.refreshGroupInvite.addEventListener("click", async () => {
+  await reopenGroupInvite();
 });
 
 els.createOffer.addEventListener("click", async () => {
@@ -641,7 +669,60 @@ async function startSignalingInvite() {
   els.wizardInviteLink.value = invite.link;
   renderQr(els.wizardInviteQr, els.wizardInviteQrNote, invite.link);
   rememberSignalingRoom(roomId, serverUrl, true);
+  rememberGroupInvite(invite.link);
   await connectSignaling(roomId, serverUrl, true);
+}
+
+async function createGroupChat() {
+  if (!requireDeviceName()) return;
+  const id = `group-${crypto.randomUUID()}`;
+  ensureConversation(id, "Neue Gruppe");
+  Object.assign(state.conversations[id], {
+    group: true,
+    groupHost: true,
+    groupStarted: false,
+    groupPeers: state.conversations[id].groupPeers || {},
+    updatedAt: Date.now(),
+  });
+  state.pendingDraftChatId = "";
+  persistConversations();
+  switchChat(id);
+  resetSession(true);
+  showWizardPage("wizard-choose", 1, "Gruppenlink teilen. Beigetretene Geräte erscheinen im Chat.");
+  if (!els.connectDialog.open) els.connectDialog.showModal();
+  await startSignalingInvite();
+  renderGroupPanel();
+}
+
+function rememberGroupInvite(link) {
+  const conversation = state.conversations[state.activeChatId];
+  if (!conversation?.groupHost) return;
+  conversation.groupInviteLink = link;
+  conversation.group = true;
+  conversation.groupStarted = Boolean(conversation.groupStarted);
+  conversation.updatedAt = Date.now();
+  persistConversations();
+  renderGroupPanel();
+}
+
+async function reopenGroupInvite() {
+  const conversation = state.conversations[state.activeChatId];
+  if (!conversation?.groupHost) return;
+  const serverUrl = normalizeSignalingServer(conversation.signalingServer || els.signalingServer.value || DEFAULT_SIGNALING_SERVER);
+  if (!conversation.signalingRoomId || !serverUrl) {
+    await startSignalingInvite();
+    return;
+  }
+  const invite = createInvite(conversation.signalingRoomId, serverUrl);
+  conversation.groupInviteLink = invite.link;
+  conversation.signalingServer = serverUrl;
+  conversation.updatedAt = Date.now();
+  persistConversations();
+  renderGroupPanel();
+  if (!state.signaling.socket || state.signaling.roomId !== conversation.signalingRoomId) {
+    await connectSignaling(conversation.signalingRoomId, serverUrl, true);
+  }
+  await copyText(els.groupInviteLink);
 }
 
 async function joinInvite(value) {
@@ -1655,8 +1736,43 @@ async function maybeEstablishPeerSession(session) {
   if (!state.sessionKey) adoptPeerSessionAsPrimary(session);
   startPeerHeartbeat(session);
   rememberGroupPeer(session);
+  await announceGroupLobbyToSession(session);
   setConnection("secure", "Gruppensitzung bereit", "Vergleiche den Sicherheitscode und bestätige die Sitzung.");
   renderReconnectButton();
+  renderSecurity();
+}
+
+async function announceGroupLobbyToSession(session) {
+  const conversation = state.conversations[session.chatId || state.activeChatId];
+  if (!conversation?.group || !conversation.groupHost) return;
+  await sendSecureToSession(
+    session,
+    {
+      kind: "group-lobby",
+      groupName: conversation.name || "Gruppenchat",
+      groupStarted: Boolean(conversation.groupStarted),
+    },
+    { trackAck: false },
+  );
+}
+
+async function startGroupConversation() {
+  const conversation = state.conversations[state.activeChatId];
+  if (!conversation?.groupHost || !conversation.group || !groupReadyToStart()) return;
+  conversation.groupStarted = true;
+  conversation.updatedAt = Date.now();
+  persistConversations();
+  for (const session of verifiedPeerSessions()) {
+    await sendSecureToSession(
+      session,
+      {
+        kind: "group-started",
+        groupName: conversation.name || "Gruppenchat",
+      },
+      { trackAck: false },
+    );
+  }
+  setConnection("secure", "Gruppe gestartet", "Alle bestätigten Geräte können jetzt senden.");
   renderSecurity();
 }
 
@@ -1864,6 +1980,14 @@ async function handlePayload(payload, session = null) {
       state.remoteSasConfirmed = true;
     }
     renderSecurity();
+    return;
+  }
+  if (payload.kind === "group-lobby") {
+    markConversationAsGroup(session, payload);
+    return;
+  }
+  if (payload.kind === "group-started") {
+    markConversationAsGroup(session, { ...payload, groupStarted: true });
     return;
   }
   const trustedChannel = session ? canUseSession(session) : canAcceptUserData();
@@ -2289,6 +2413,7 @@ async function waitForBufferedAmount() {
 }
 
 function canSendUserData() {
+  if (isGroupLocked()) return false;
   return Boolean(
     state.sessionKey &&
     state.channel?.readyState === "open" &&
@@ -2302,6 +2427,14 @@ function canSendUserData() {
 
 function canAcceptUserData() {
   return canSendUserData();
+}
+
+function activeConversation() {
+  return state.conversations[state.activeChatId] || null;
+}
+
+function isGroupLocked(conversation = activeConversation()) {
+  return Boolean(conversation?.group && !conversation.groupStarted);
 }
 
 function establishedPeerSessions(chatId = state.activeChatId) {
@@ -2321,6 +2454,18 @@ function canUseSession(session) {
 
 function verifiedPeerSessions(chatId = state.activeChatId) {
   return establishedPeerSessions(chatId).filter(canUseSession);
+}
+
+function groupReadyToStart() {
+  const conversation = activeConversation();
+  const sessions = establishedPeerSessions();
+  return Boolean(
+    conversation?.groupHost &&
+    conversation.group &&
+    !conversation.groupStarted &&
+    sessions.length > 0 &&
+    sessions.every(canUseSession),
+  );
 }
 
 async function trustRemoteIdentity() {
@@ -2380,9 +2525,12 @@ function renderSecurity() {
   document.querySelector(".file-button").classList.toggle("disabled", !canSendUserData());
   const verifiedCount = verifiedPeerSessions().length;
   const establishedCount = established.length;
+  const conversation = activeConversation();
   els.chatTitle.textContent = chatDisplayName(established);
   els.peerSummary.textContent = establishedCount > 1
     ? `Verschlüsselter Chat · ${verifiedCount}/${establishedCount} Geräte verifiziert`
+    : conversation?.group && !conversation.groupStarted
+      ? "Verschlüsselter Chat · Gruppe noch nicht gestartet"
     : state.remoteName
     ? `Verschlüsselter Chat · ${state.sessionId || "Session im Aufbau"}`
     : state.messages.some((message) => message.chatId === state.activeChatId)
@@ -2401,10 +2549,13 @@ function renderSecurity() {
 
   els.securityPill.textContent = canSendUserData()
     ? "Verifiziert"
+    : isGroupLocked(conversation)
+      ? "Gruppe wartet"
     : state.sessionKey || establishedCount > 0
       ? "Verschlüsselt, nicht verifiziert"
       : "Nicht verifiziert";
   els.securityPill.className = `pill ${canSendUserData() ? "verified" : state.sessionKey || establishedCount > 0 ? "secure" : ""}`;
+  renderGroupPanel();
   renderChatList();
   flushPendingOutbox();
   maybeAutoCloseWizard();
@@ -2432,10 +2583,77 @@ function renderPeerCodes(sessions) {
   render(els.wizardPeerCodes);
 }
 
+function renderGroupPanel() {
+  const conversation = activeConversation();
+  if (!conversation?.group) {
+    els.groupPanel.hidden = true;
+    return;
+  }
+  els.groupPanel.hidden = false;
+  const established = establishedPeerSessions();
+  const verified = verifiedPeerSessions();
+  const isHost = Boolean(conversation.groupHost);
+  els.groupHostTools.hidden = !isHost;
+  els.groupStart.hidden = !isHost || conversation.groupStarted;
+  els.groupStart.disabled = !groupReadyToStart();
+  els.groupInviteLink.value = conversation.groupInviteLink || "";
+
+  if (conversation.groupStarted) {
+    els.groupState.textContent = `${verified.length} Gerät${verified.length === 1 ? "" : "e"} verbunden. Weitere Einladungen nur durch den Host.`;
+  } else if (isHost) {
+    els.groupState.textContent = groupReadyToStart()
+      ? "Alle beigetretenen Geräte sind bestätigt. Du kannst die Gruppe starten."
+      : "Teile den Link, vergleicht die Codes und bestätige alle beigetretenen Geräte.";
+  } else {
+    els.groupState.textContent = "Vergleiche den Code. Danach startet der Host die Gruppe.";
+  }
+
+  els.groupParticipants.innerHTML = "";
+  els.groupParticipants.append(participantRow(els.displayName.value.trim() || "Du", isHost ? "Host" : "Dieses Gerät", true));
+  const sessionsByIdentity = new Map();
+  for (const session of established) {
+    if (session.remoteHello?.identityKey) sessionsByIdentity.set(session.remoteHello.identityKey, session);
+  }
+  const peers = conversation.groupPeers || {};
+  for (const [identityKey, peer] of Object.entries(peers)) {
+    const session = sessionsByIdentity.get(identityKey);
+    els.groupParticipants.append(
+      participantRow(peer.name || session?.remoteName || "Peer", groupParticipantStatus(session), canUseSession(session)),
+    );
+  }
+  if (Object.keys(peers).length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "group-empty";
+    empty.textContent = isHost ? "Noch niemand beigetreten." : "Warte auf den Host.";
+    els.groupParticipants.append(empty);
+  }
+}
+
+function participantRow(name, status, ok) {
+  const row = document.createElement("div");
+  row.className = `participant-row ${ok ? "ok" : ""}`;
+  const title = document.createElement("strong");
+  title.textContent = name;
+  const stateLabel = document.createElement("span");
+  stateLabel.textContent = status;
+  row.append(title, stateLabel);
+  return row;
+}
+
+function groupParticipantStatus(session) {
+  if (!session) return "wartet";
+  if (canUseSession(session)) return "verifiziert";
+  if (session.disconnected) return "getrennt";
+  if (session.sessionKey && session.localSasConfirmed) return "wartet auf Bestätigung";
+  if (session.sessionKey) return `Code ${session.sas || "------"}`;
+  return "verbindet";
+}
+
 function chatDisplayName(established) {
+  const conversation = activeConversation();
+  if (conversation?.group) return conversation.name || "Gruppenchat";
   if (established.length > 1) return "Gruppenchat";
   if (state.remoteName) return state.remoteName;
-  const conversation = state.conversations[state.activeChatId];
   if (conversation && !["Neuer Chat", "Aktueller Chat"].includes(conversation.name || "")) {
     return conversation.name || "Chat";
   }
@@ -2476,17 +2694,26 @@ function updateWizardFromConnection() {
     return;
   }
 
+  if (activeConversation()?.group && establishedPeerSessions().some(canUseSession)) {
+    els.wizardSecureState.textContent = activeConversation().groupHost
+      ? "Geräte bestätigt. Starte die Gruppe im Chatfenster, sobald alle beigetreten sind."
+      : "Gerät bestätigt. Warte, bis der Host die Gruppe startet.";
+    maybeAutoCloseWizard();
+    return;
+  }
+
   els.wizardSecureState.textContent = state.localSasConfirmed
     ? "Dein Code ist bestätigt. Warte auf die Bestätigung des anderen Geräts."
     : "Vergleiche den Code auf beiden Geräten und bestätige nur bei Übereinstimmung.";
 }
 
 function maybeAutoCloseWizard() {
-  if (!canSendUserData() || !els.connectDialog.open || state.wizardCloseTimer) return;
+  const groupLobbyReady = Boolean(activeConversation()?.group && establishedPeerSessions().some(canUseSession));
+  if ((!canSendUserData() && !groupLobbyReady) || !els.connectDialog.open || state.wizardCloseTimer) return;
   els.wizardSecureState.textContent = "Verbindung bestätigt. Der Chat öffnet sich jetzt.";
   state.wizardCloseTimer = window.setTimeout(() => {
     state.wizardCloseTimer = null;
-    if (els.connectDialog.open && canSendUserData()) {
+    if (els.connectDialog.open && (canSendUserData() || groupLobbyReady)) {
       els.connectDialog.close();
     }
   }, 900);
@@ -2941,13 +3168,14 @@ function rememberGroupPeer(session) {
   };
   const peerCount = Object.keys(peers).length;
   const isDraftName = ["Neuer Chat", "Aktueller Chat", "Peer"].includes(conversation.name || "");
+  const isGroup = Boolean(conversation.group) || peerCount > 1;
   Object.assign(conversation, {
-    name: peerCount > 1
-      ? "Gruppenchat"
+    name: isGroup
+      ? conversation.name || "Gruppenchat"
       : isDraftName
         ? session.remoteName || "Peer"
         : conversation.name,
-    group: peerCount > 1,
+    group: isGroup,
     groupPeers: peers,
     signalingRoomId: state.signaling.roomId || conversation.signalingRoomId,
     signalingServer: state.signaling.serverUrl || conversation.signalingServer,
@@ -2955,6 +3183,25 @@ function rememberGroupPeer(session) {
   });
   persistConversations();
   renderChatList();
+  renderGroupPanel();
+}
+
+function markConversationAsGroup(session, payload) {
+  const chatId = session?.chatId || state.activeChatId;
+  ensureConversation(chatId, payload.groupName || "Gruppenchat");
+  const conversation = state.conversations[chatId];
+  const isDraftName = ["Neuer Chat", "Aktueller Chat", "Peer"].includes(conversation.name || "");
+  Object.assign(conversation, {
+    name: isDraftName ? payload.groupName || "Gruppenchat" : conversation.name || payload.groupName || "Gruppenchat",
+    group: true,
+    groupHost: Boolean(conversation.groupHost),
+    groupStarted: Boolean(payload.groupStarted || conversation.groupStarted),
+    updatedAt: Date.now(),
+  });
+  persistConversations();
+  renderChatList();
+  renderGroupPanel();
+  renderSecurity();
 }
 
 function deleteEmptyDraftConversation(id) {
@@ -2993,7 +3240,9 @@ function renderChatList() {
     button.innerHTML = `<strong></strong><small></small>`;
     button.querySelector("strong").textContent = conversation.name || "Chat";
     button.querySelector("small").textContent =
-      conversation.id === state.activeChatId && canSendUserData()
+      conversation.group && !conversation.groupStarted
+        ? "Gruppe vorbereiten"
+        : conversation.id === state.activeChatId && canSendUserData()
         ? "verbunden"
         : count > 0
           ? `${count} Nachricht${count === 1 ? "" : "en"} · neu verbinden`
@@ -3128,7 +3377,7 @@ function statusText(status) {
 }
 
 function needsSenderSignature(payload) {
-  return ["chat", "message-edit", "message-delete", "file-meta", "file-end"].includes(payload.kind);
+  return ["chat", "message-edit", "message-delete", "file-meta", "file-end", "group-lobby", "group-started"].includes(payload.kind);
 }
 
 async function signPayloadIfNeeded(payload) {

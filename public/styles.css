@@ -276,6 +276,12 @@ input:disabled,
   gap: 8px;
 }
 
+.list-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .panel-title-row {
   display: flex;
   align-items: center;
@@ -380,7 +386,7 @@ input:disabled,
 
 .chat-panel {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   min-height: 0;
   overflow: hidden;
 }
@@ -452,6 +458,78 @@ input:disabled,
 .chat-verify-strip button {
   min-height: 38px;
   padding: 8px 11px;
+}
+
+.group-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.34);
+}
+
+.group-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.group-panel-head p {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.group-host-tools {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.compact-field {
+  gap: 4px;
+}
+
+.compact-buttons {
+  min-width: 190px;
+}
+
+.participant-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.participant-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.participant-row strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
+}
+
+.participant-row span,
+.group-empty {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.participant-row.ok {
+  border-color: rgba(15, 123, 71, 0.28);
+  background: rgba(223, 244, 231, 0.72);
 }
 
 .messages {
@@ -1112,6 +1190,44 @@ pre.file-preview {
 
   .chat-verify-strip strong {
     font-size: 1.08rem;
+  }
+
+  .group-panel {
+    padding: 10px 12px;
+    gap: 9px;
+    max-height: 34dvh;
+    overflow: auto;
+  }
+
+  .group-panel-head {
+    align-items: start;
+  }
+
+  .group-panel-head p {
+    font-size: 0.78rem;
+  }
+
+  .group-host-tools {
+    grid-template-columns: 1fr;
+  }
+
+  .compact-buttons {
+    min-width: 0;
+  }
+
+  .participant-list {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .participant-row {
+    flex: 0 0 auto;
+    padding: 6px 8px;
+  }
+
+  .participant-row strong {
+    max-width: 120px;
   }
 
   .pill {
