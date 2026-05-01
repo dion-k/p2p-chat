@@ -840,20 +840,24 @@ async function createOfferForSignaling() {
 
 async function handleSignalingMessage(raw) {
   const message = JSON.parse(raw);
-  if (message.clientId && message.clientId === state.signaling.clientId) return;
   if (message.protocol && message.protocol !== SIGNALING_PROTOCOL) return;
-  if (message.targetClientId && message.targetClientId !== state.signaling.clientId) return;
 
   if (message.type === "room-ready") {
     const peers = Array.isArray(message.peers) ? message.peers : [];
     for (const peer of peers) {
-      await connectGroupPeer(peer.clientId, shouldOfferToPeer(peer.clientId), peer.name);
+      await connectGroupPeer(peer.clientId, shouldOfferToPeer(peer.clientId, peer.role), peer.name);
     }
     return;
   }
 
+  if (message.clientId && message.clientId === state.signaling.clientId) return;
+  if (message.targetClientId && message.targetClientId !== state.signaling.clientId) return;
+
   if (message.type === "peer-joined") {
-    await connectGroupPeer(message.clientId, shouldOfferToPeer(message.clientId), message.name);
+    if (!activeConversation()?.group && els.connectDialog.open) {
+      showWizardPage("wizard-wait", 4, "Gerät beigetreten. WebRTC und E2E-Handshake laufen.");
+    }
+    await connectGroupPeer(message.clientId, shouldOfferToPeer(message.clientId, message.role), message.name);
     return;
   }
 
@@ -886,7 +890,9 @@ async function handleSignalingMessage(raw) {
   }
 }
 
-function shouldOfferToPeer(peerClientId) {
+function shouldOfferToPeer(peerClientId, peerRole = "") {
+  if (state.signaling.isOfferer && peerRole !== "offerer") return true;
+  if (!state.signaling.isOfferer && peerRole === "offerer") return false;
   return state.signaling.clientId.localeCompare(peerClientId) < 0;
 }
 
