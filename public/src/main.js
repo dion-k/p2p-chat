@@ -14,10 +14,19 @@ const els = {
   connectionLabel: document.querySelector("#connection-label"),
   connectionDetail: document.querySelector("#connection-detail"),
   securityPill: document.querySelector("#security-pill"),
+  toggleSecurity: document.querySelector("#toggle-security"),
+  closeSecurity: document.querySelector("#close-security"),
   mobileSettings: document.querySelector("#mobile-settings"),
   closeMobileSettings: document.querySelector("#close-mobile-settings"),
   deleteChat: document.querySelector("#delete-chat"),
+  resetAppData: document.querySelector("#reset-app-data"),
   peerSummary: document.querySelector("#peer-summary"),
+  chatTitle: document.querySelector("#chat-title"),
+  chatReconnect: document.querySelector("#chat-reconnect"),
+  chatVerifyStrip: document.querySelector("#chat-verify-strip"),
+  chatSasCode: document.querySelector("#chat-sas-code"),
+  chatPeerCodes: document.querySelector("#chat-peer-codes"),
+  chatConfirmSas: document.querySelector("#chat-confirm-sas"),
   sasCode: document.querySelector("#sas-code"),
   peerCodes: document.querySelector("#peer-codes"),
   sessionKeyId: document.querySelector("#session-key-id"),
@@ -172,7 +181,7 @@ async function init() {
   if (location.protocol === "file:") {
     els.secureWarning.hidden = false;
     els.secureWarning.textContent =
-      "Du öffnest die App über file://. Für echte Geräte bitte localhost oder eine HTTPS-Adresse im LAN verwenden.";
+      "Du öffnest die App als lokale Datei. Für WebRTC und Web Crypto muss sie über HTTPS gehostet werden.";
   }
 
   if (!window.isSecureContext || !crypto.subtle) {
@@ -180,7 +189,7 @@ async function init() {
     els.createOffer.disabled = true;
     els.acceptSignal.disabled = true;
     els.openWizard.disabled = true;
-    setConnection("idle", "Unsicherer Kontext", "Öffne die App über localhost oder HTTPS.");
+    setConnection("idle", "Unsicherer Kontext", "Öffne die App über HTTPS.");
     return;
   }
 
@@ -297,6 +306,10 @@ els.reconnectChat.addEventListener("click", async () => {
   await reconnectCurrentChat();
 });
 
+els.chatReconnect.addEventListener("click", async () => {
+  await reconnectCurrentChat();
+});
+
 els.mobileReconnectChat.addEventListener("click", async () => {
   await reconnectCurrentChat();
 });
@@ -318,8 +331,23 @@ els.closeMobileSettings.addEventListener("click", () => {
   document.querySelector(".app-shell").classList.remove("show-settings");
 });
 
+els.toggleSecurity.addEventListener("click", () => {
+  const shell = document.querySelector(".app-shell");
+  const expanded = shell.classList.toggle("show-security");
+  els.toggleSecurity.setAttribute("aria-expanded", String(expanded));
+});
+
+els.closeSecurity.addEventListener("click", () => {
+  document.querySelector(".app-shell").classList.remove("show-security");
+  els.toggleSecurity.setAttribute("aria-expanded", "false");
+});
+
 els.deleteChat.addEventListener("click", () => {
   deleteCurrentChatForMe();
+});
+
+els.resetAppData.addEventListener("click", async () => {
+  await resetAllAppData();
 });
 
 els.wizardStartA.addEventListener("click", async () => {
@@ -1261,6 +1289,10 @@ els.confirmSas.addEventListener("click", async () => {
   await confirmSas();
 });
 
+els.chatConfirmSas.addEventListener("click", async () => {
+  await confirmSas();
+});
+
 async function confirmSas() {
   state.localSasConfirmed = true;
   const establishedSessions = establishedPeerSessions();
@@ -2105,23 +2137,27 @@ function renderSecurity() {
     ? established.every((session) => session.localSasConfirmed)
     : state.localSasConfirmed;
   els.sasCode.textContent = activeSas || "------";
+  els.chatSasCode.textContent = activeSas || "------";
   els.sessionKeyId.textContent = activeSessionId || "keine aktive Session";
   els.wizardSasCode.textContent = activeSas || "------";
   renderPeerCodes(established);
   els.confirmSas.disabled = (!state.sessionKey && established.length === 0) || localConfirmed;
   els.wizardConfirmSas.disabled = (!state.sessionKey && established.length === 0) || localConfirmed;
+  els.chatConfirmSas.disabled = (!state.sessionKey && established.length === 0) || localConfirmed;
+  els.chatVerifyStrip.hidden = established.length === 0 && !state.sessionKey;
   els.messageInput.disabled = !canSendUserData();
   els.sendMessage.disabled = !canSendUserData();
   document.querySelector(".file-button").classList.toggle("disabled", !canSendUserData());
   const verifiedCount = verifiedPeerSessions().length;
   const establishedCount = established.length;
+  els.chatTitle.textContent = chatDisplayName(established);
   els.peerSummary.textContent = establishedCount > 1
-    ? `${verifiedCount}/${establishedCount} Geräte verifiziert · Gruppenchat`
+    ? `Verschlüsselter Chat · ${verifiedCount}/${establishedCount} Geräte verifiziert`
     : state.remoteName
-    ? `${state.remoteName} · ${state.sessionId || "Session im Aufbau"}`
+    ? `Verschlüsselter Chat · ${state.sessionId || "Session im Aufbau"}`
     : state.messages.some((message) => message.chatId === state.activeChatId)
-      ? "Verlauf geladen · zum Senden neu verbinden"
-      : "Noch kein Peer verbunden";
+      ? "Verschlüsselter Chat · zum Senden neu verbinden"
+      : "Verschlüsselter Chat";
 
   setCheck(els.checks.identity, !!state.remoteHello || establishedCount > 0, "Identity Key empfangen", "Warte auf Peer-Identity");
   setCheck(els.checks.signature, !!state.remoteHello || establishedCount > 0, "Identity-Signatur gültig", "Warte auf signierten Handshake");
@@ -2162,7 +2198,18 @@ function renderPeerCodes(sessions) {
     }
   };
   render(els.peerCodes);
+  render(els.chatPeerCodes);
   render(els.wizardPeerCodes);
+}
+
+function chatDisplayName(established) {
+  if (established.length > 1) return "Gruppenchat";
+  if (state.remoteName) return state.remoteName;
+  const conversation = state.conversations[state.activeChatId];
+  if (conversation && !["Neuer Chat", "Aktueller Chat"].includes(conversation.name || "")) {
+    return conversation.name || "Chat";
+  }
+  return "Noch kein Peer";
 }
 
 function showWizardPage(id, step, subtitle) {
@@ -2243,10 +2290,10 @@ function renderMessages() {
       item.append(renderFileCard(message));
     } else {
       const body = document.createElement("div");
+      body.className = "message-body";
       body.textContent = message.deleted ? "Nachricht gelöscht" : message.body;
       item.append(body);
     }
-    item.append(renderMessageActions(message));
     if (message.download && !message.file) {
       const link = document.createElement("a");
       link.href = message.download.url;
@@ -2257,7 +2304,10 @@ function renderMessages() {
     const meta = document.createElement("div");
     meta.className = "meta";
     const edited = message.editedAt ? " · bearbeitet" : "";
-    meta.innerHTML = `<span>${new Date(message.createdAt).toLocaleTimeString()}${edited}</span><span class="status">${statusText(message.status)}</span>`;
+    const info = document.createElement("span");
+    info.textContent = `${new Date(message.createdAt).toLocaleTimeString()} · ${statusText(message.status)}${edited}`;
+    const actions = renderMessageActions(message);
+    meta.append(info, actions);
     item.append(meta);
     els.messages.append(item);
   }
@@ -2495,6 +2545,47 @@ function deleteCurrentChatForMe() {
   renderSecurity();
 }
 
+async function resetAllAppData() {
+  if (!window.confirm("Alle lokalen App-Daten in diesem Browser löschen? Chats, Gerätename, bekannte Peers und Schlüssel werden entfernt.")) {
+    return;
+  }
+  closeSignaling();
+  for (const pending of state.pending.values()) window.clearTimeout(pending.timer);
+  for (const session of state.peerSessions.values()) resetPeerSession(session);
+  state.pc?.close();
+  state.db?.close?.();
+
+  document.cookie.split(";").forEach((cookie) => {
+    const name = cookie.split("=")[0]?.trim();
+    if (name) document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+  });
+
+  localStorage.clear();
+  sessionStorage.clear();
+
+  if ("caches" in window) {
+    const keys = await caches.keys();
+    await Promise.all(keys.map((key) => caches.delete(key)));
+  }
+
+  if ("serviceWorker" in navigator) {
+    const registrations = await navigator.serviceWorker.getRegistrations();
+    await Promise.all(registrations.map((registration) => registration.unregister()));
+  }
+
+  await deleteIndexedDb(DB_NAME);
+  location.replace("/");
+}
+
+function deleteIndexedDb(name) {
+  return new Promise((resolve) => {
+    const request = indexedDB.deleteDatabase(name);
+    request.onsuccess = resolve;
+    request.onerror = resolve;
+    request.onblocked = resolve;
+  });
+}
+
 function markMessage(id, status) {
   const message = state.messages.find((entry) => entry.id === id);
   if (message) {
@@ -2727,6 +2818,7 @@ function renderReconnectButton() {
   const hidden = !conversation?.signalingRoomId || canSendUserData();
   els.reconnectChat.hidden = hidden;
   els.mobileReconnectChat.hidden = hidden;
+  els.chatReconnect.hidden = hidden;
 }
 
 function loadSeenMessageIds() {

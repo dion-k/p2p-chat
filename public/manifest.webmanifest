@@ -1,7 +1,7 @@
 {
-  "name": "LAN Secure Chat",
-  "short_name": "LAN Chat",
-  "description": "Encrypted peer-to-peer LAN chat in the browser.",
+  "name": "P2P Chat",
+  "short_name": "P2P Chat",
+  "description": "End-to-end encrypted peer-to-peer chat in the browser.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

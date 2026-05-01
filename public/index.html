@@ -3,10 +3,10 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>LAN Secure Chat</title>
+    <title>P2P Chat</title>
     <meta name="theme-color" content="#166a55" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-title" content="LAN Chat" />
+    <meta name="apple-mobile-web-app-title" content="P2P Chat" />
     <base href="/" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="apple-touch-icon" href="./icons/icon.svg" />
@@ -18,14 +18,14 @@
         <div class="brand">
           <div class="brand-mark" aria-hidden="true">LC</div>
           <div>
-            <h1>LAN Secure Chat</h1>
+            <h1>P2P Chat</h1>
             <p>Verschlüsselt im Browser</p>
           </div>
         </div>
         <button id="close-mobile-settings" class="ghost mobile-only full" type="button">Fertig</button>
 
         <div class="notice" id="secure-context-warning" hidden>
-          Diese Seite braucht einen sicheren Browser-Kontext. Nutze localhost oder HTTPS.
+          Diese Seite braucht HTTPS. Öffne die veröffentlichte Web-App oder hoste sie über einen sicheren Webserver.
         </div>
 
         <label class="field">
@@ -54,6 +54,7 @@
         <button id="reconnect-chat" class="ghost full" hidden>Neu verbinden</button>
         <button id="install-app" class="ghost full" hidden>Als Webapp installieren</button>
         <button id="reset-session" class="ghost full">Trennen</button>
+        <button id="reset-app-data" class="ghost danger-action full" type="button">App-Daten löschen</button>
 
         <div class="chat-list">
           <div class="list-title">
@@ -94,17 +95,28 @@
       <section class="chat-panel" aria-labelledby="chat-title">
         <header class="chat-header">
           <div>
-            <h2 id="chat-title">Verschlüsselter Chat</h2>
+            <h2 id="chat-title">Noch kein Peer</h2>
             <p id="peer-summary">Noch kein Peer verbunden</p>
           </div>
           <div class="chat-header-actions">
             <button id="delete-chat" class="ghost danger-action" type="button">Chat löschen</button>
+            <button id="chat-reconnect" class="ghost reconnect-inline" type="button" hidden>Neu verbinden</button>
             <select id="mobile-chat-switch" class="mobile-only chat-switch" aria-label="Chat wechseln"></select>
             <button id="mobile-reconnect-chat" class="ghost mobile-only" type="button" hidden>Reconnect</button>
+            <button id="toggle-security" class="ghost" type="button" aria-expanded="false">Sitzung</button>
             <button id="mobile-settings" class="ghost mobile-only" type="button">Einstellungen</button>
             <div class="pill" id="security-pill">Nicht verifiziert</div>
           </div>
         </header>
+
+        <section id="chat-verify-strip" class="chat-verify-strip" hidden>
+          <div>
+            <span>Sicherheitscode</span>
+            <strong id="chat-sas-code">------</strong>
+          </div>
+          <div id="chat-peer-codes" class="peer-codes compact-codes" hidden></div>
+          <button id="chat-confirm-sas" type="button" class="primary">Code stimmt</button>
+        </section>
 
         <div id="messages" class="messages" aria-live="polite"></div>
 
@@ -117,7 +129,10 @@
       </section>
 
       <aside class="panel security-panel" aria-labelledby="security-title">
-        <h2 id="security-title">Sitzung</h2>
+        <div class="panel-title-row">
+          <h2 id="security-title">Sitzung</h2>
+          <button id="close-security" class="ghost" type="button">Fertig</button>
+        </div>
 
         <div class="security-block">
           <span>Sicherheitscode</span>
@@ -172,6 +187,7 @@
           <div class="wizard-step-label">Setup</div>
           <h3>Chat verbinden</h3>
           <p class="wizard-copy">Teile den Code oder Link mit den anderen Geräten. Der Server sieht nur Verbindungsdaten.</p>
+          <p class="wizard-copy">Für Gruppen teilst du denselben Link einfach mit mehreren Geräten.</p>
 
           <div class="invite-grid">
             <div class="invite-card">
@@ -308,6 +324,6 @@
     <script src="./src/vendor/pako.min.js?v=3"></script>
     <script src="./src/vendor/qrcode-generator.js?v=3"></script>
     <script src="./src/vendor/jsQR.js?v=3"></script>
-    <script type="module" src="./src/main.js?v=17"></script>
+    <script type="module" src="./src/main.js?v=18"></script>
   </body>
 </html>
