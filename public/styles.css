@@ -254,6 +254,33 @@ input:disabled,
   gap: 12px;
 }
 
+.side-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.38);
+}
+
+.side-tab-button {
+  min-height: 38px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.side-tab-button.active {
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  box-shadow: var(--inner-glow);
+}
+
+.side-tab-panel {
+  display: grid;
+  gap: 12px;
+}
+
 .advanced-box summary {
   cursor: pointer;
   color: var(--muted);
@@ -488,6 +515,43 @@ input:disabled,
   align-items: end;
 }
 
+.group-invite-card {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto 160px minmax(160px, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.48);
+}
+
+.group-invite-card span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.group-invite-card strong {
+  display: block;
+  margin-top: 3px;
+  color: var(--accent-dark);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 1.25rem;
+}
+
+.group-invite-card canvas {
+  width: 92px;
+  height: 92px;
+  border-radius: 8px;
+}
+
+.group-invite-card p {
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .compact-field {
   gap: 4px;
 }
@@ -532,6 +596,13 @@ input:disabled,
   background: rgba(223, 244, 231, 0.72);
 }
 
+.participant-remove {
+  padding: 4px 7px;
+  font-size: 0.7rem;
+  color: var(--danger);
+  background: rgba(255, 255, 255, 0.66);
+}
+
 .messages {
   display: flex;
   flex-direction: column;
@@ -563,6 +634,13 @@ input:disabled,
 .message-body {
   line-height: 1.38;
   overflow-wrap: anywhere;
+}
+
+.message-sender {
+  margin-bottom: 3px;
+  color: var(--accent-dark);
+  font-size: 0.75rem;
+  font-weight: 900;
 }
 
 .message.mine {
@@ -1209,6 +1287,15 @@ pre.file-preview {
 
   .group-host-tools {
     grid-template-columns: 1fr;
+  }
+
+  .group-invite-card {
+    grid-template-columns: 1fr auto;
+    gap: 8px;
+  }
+
+  .group-invite-card p {
+    grid-column: 1 / -1;
   }
 
   .compact-buttons {

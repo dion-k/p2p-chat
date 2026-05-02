@@ -8,6 +8,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="P2P Chat" />
     <base href="/" />
+    <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <link rel="apple-touch-icon" href="./icons/icon.svg" />
     <link rel="stylesheet" href="./styles.css" />
@@ -28,52 +29,62 @@
           Diese Seite braucht HTTPS. Öffne die veröffentlichte Web-App oder hoste sie über einen sicheren Webserver.
         </div>
 
-        <label class="field">
-          <span>Dein Name</span>
-          <input id="display-name" autocomplete="nickname" maxlength="42" placeholder="Gerätename" />
-        </label>
-
-        <details class="advanced-box">
-          <summary>Signaling-Server</summary>
-          <label class="field">
-            <span>WebSocket-URL</span>
-            <input id="signaling-server" autocomplete="off" placeholder="wss://dein-worker.example.workers.dev" />
-          </label>
-          <p class="hint">Standard: signaling.p2p.di0n.de. Der Server vermittelt nur WebRTC-Signaling.</p>
-        </details>
-
-        <div class="connection-state">
-          <span id="connection-dot" class="dot idle"></span>
-          <div>
-            <strong id="connection-label">Nicht verbunden</strong>
-            <p id="connection-detail">Erstelle eine Einladung oder füge eine Einladung ein.</p>
-          </div>
+        <div class="side-tabs" role="tablist" aria-label="Bereich wählen">
+          <button id="side-tab-chats" class="side-tab-button active" type="button">Chats</button>
+          <button id="side-tab-settings" class="side-tab-button" type="button">Einstellungen</button>
         </div>
 
-        <button id="open-wizard" class="primary big-action">Verbinden</button>
-        <button id="reconnect-chat" class="ghost full" hidden>Neu verbinden</button>
-        <button id="install-app" class="ghost full" hidden>Als Webapp installieren</button>
-        <button id="reset-session" class="ghost full">Trennen</button>
-        <button id="reset-app-data" class="ghost danger-action full" type="button">App-Daten löschen</button>
-
-        <div class="chat-list">
-          <div class="list-title">
-            <span>Chats</span>
-            <div class="list-actions">
-              <button id="new-group" class="mini-button" type="button">Gruppe</button>
-              <button id="new-chat" class="mini-button icon-mini" type="button" aria-label="Neuer Chat">+</button>
+        <section id="side-panel-chats" class="side-tab-panel">
+          <div class="connection-state">
+            <span id="connection-dot" class="dot idle"></span>
+            <div>
+              <strong id="connection-label">Nicht verbunden</strong>
+              <p id="connection-detail">Erstelle eine Einladung oder füge eine Einladung ein.</p>
             </div>
           </div>
-          <div id="chat-list"></div>
-        </div>
 
-        <details class="advanced-box">
-          <summary>Erweitert</summary>
+          <button id="open-wizard" class="primary big-action">Verbinden</button>
+          <button id="reconnect-chat" class="ghost full" hidden>Neu verbinden</button>
+          <button id="reset-session" class="ghost full">Trennen</button>
+
+          <div class="chat-list">
+            <div class="list-title">
+              <span>Chats</span>
+              <div class="list-actions">
+                <button id="new-group" class="mini-button" type="button">Gruppe</button>
+                <button id="new-chat" class="mini-button icon-mini" type="button" aria-label="Neuer Chat">+</button>
+              </div>
+            </div>
+            <div id="chat-list"></div>
+          </div>
+        </section>
+
+        <section id="side-panel-settings" class="side-tab-panel" hidden>
+          <label class="field">
+            <span>Dein Name</span>
+            <input id="display-name" autocomplete="nickname" maxlength="42" placeholder="Gerätename" />
+          </label>
+
+          <details class="advanced-box" open>
+            <summary>Signaling-Server</summary>
+            <label class="field">
+              <span>WebSocket-URL</span>
+              <input id="signaling-server" autocomplete="off" placeholder="wss://dein-worker.example.workers.dev" />
+            </label>
+            <p class="hint">Standard: signaling.p2p.di0n.de. Andere Server werden automatisch in Invite-Links übernommen.</p>
+          </details>
+
+          <button id="install-app" class="ghost full" hidden>Als Webapp installieren</button>
+          <button id="reset-app-data" class="ghost danger-action full" type="button">App-Daten löschen</button>
+
           <div class="identity-card">
             <span>Dein Fingerprint</span>
             <strong id="local-fingerprint">wird erstellt...</strong>
           </div>
+        </section>
 
+        <details class="advanced-box" hidden>
+          <summary>Erweitert</summary>
           <button id="create-offer" class="ghost full">Manuell: Einladung erstellen</button>
 
           <label class="field">
@@ -125,19 +136,32 @@
         <section id="group-panel" class="group-panel" hidden>
           <div class="group-panel-head">
             <div>
-              <strong>Gruppe vorbereiten</strong>
+              <strong id="group-panel-title">Gruppe vorbereiten</strong>
               <p id="group-state">Warte auf Teilnehmer.</p>
             </div>
             <button id="group-start" class="primary" type="button" hidden>Gruppe starten</button>
           </div>
           <div id="group-host-tools" class="group-host-tools" hidden>
             <label class="field compact-field">
+              <span>Gruppenname</span>
+              <input id="group-name-input" maxlength="48" placeholder="Gruppenname" />
+            </label>
+            <button id="save-group-name" class="ghost" type="button">Speichern</button>
+            <div class="group-invite-card">
+              <div>
+                <span>Invite-Code</span>
+                <strong id="group-short-code">------</strong>
+              </div>
+              <canvas id="group-invite-qr" width="160" height="160" aria-label="Gruppen-Invite-QR-Code"></canvas>
+              <p id="group-invite-qr-note">Invite wird lokal erzeugt.</p>
+            </div>
+            <label class="field compact-field">
               <span>Invite-Link</span>
               <input id="group-invite-link" readonly />
             </label>
             <div class="button-row compact-buttons">
               <button id="copy-group-invite" class="ghost" type="button">Kopieren</button>
-              <button id="refresh-group-invite" class="ghost" type="button">Einladen</button>
+              <button id="refresh-group-invite" class="ghost" type="button">Einladungen öffnen</button>
             </div>
           </div>
           <div id="group-participants" class="participant-list"></div>
@@ -212,7 +236,7 @@
           <div class="wizard-step-label">Setup</div>
           <h3>Chat verbinden</h3>
           <p class="wizard-copy">Teile den Code oder Link mit den anderen Geräten. Der Server sieht nur Verbindungsdaten.</p>
-          <p class="wizard-copy">Für Gruppen teilst du denselben Link einfach mit mehreren Geräten.</p>
+          <p class="wizard-copy">Für Gruppen nutzt du den Button „Gruppe“ in der Chatliste.</p>
 
           <div class="invite-grid">
             <div class="invite-card">
@@ -238,7 +262,7 @@
           </label>
           <button id="wizard-start-b" type="button" class="primary full">Verbinden</button>
 
-          <details class="code-details">
+          <details id="wizard-manual-details" class="code-details">
             <summary>Erweitert: manuelle Codes</summary>
             <p class="wizard-copy">Nur nötig, wenn kein Signaling-Server eingerichtet ist.</p>
             <div class="choice-grid">
@@ -349,6 +373,6 @@
     <script src="./src/vendor/pako.min.js?v=3"></script>
     <script src="./src/vendor/qrcode-generator.js?v=3"></script>
     <script src="./src/vendor/jsQR.js?v=3"></script>
-    <script type="module" src="./src/main.js?v=21"></script>
+    <script type="module" src="./src/main.js?v=23"></script>
   </body>
 </html>
