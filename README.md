@@ -1,26 +1,26 @@
 # P2P Chat
 
-P2P Chat ist eine browserbasierte Ende-zu-Ende-verschluesselte Chat-App fuer direkte WebRTC-Verbindungen. Die oeffentliche Instanz ist bereits unter [p2p.di0n.de](https://p2p.di0n.de) verfuegbar und kann dort ohne eigene Installation genutzt werden. Es gibt keine App-seitigen Nutzungslimits; nur der optionale Signaling-Server hat technische und kontoabhaengige Ressourcenlimits.
+P2P Chat ist eine browserbasierte Ende-zu-Ende-verschlüsselte Chat-App für direkte WebRTC-Verbindungen. Die öffentliche Instanz ist bereits unter [p2p.di0n.de](https://p2p.di0n.de) verfügbar und kann dort ohne eigene Installation genutzt werden. Es gibt keine App-seitigen Nutzungslimits; nur der optionale Signaling-Server hat technische und kontoabhängige Ressourcenlimits.
 
 ## Was die App macht
 
-- Direkte Peer-to-Peer-Chats ueber WebRTC DataChannels
-- Ende-zu-Ende-Verschluesselung im Browser
-- Optionales Cloudflare-WebSocket-Signaling fuer einfachere Einladungen und Reconnect
+- Direkte Peer-to-Peer-Chats über WebRTC DataChannels
+- Ende-zu-Ende-Verschlüsselung im Browser
+- Optionales Cloudflare-WebSocket-Signaling für einfachere Einladungen und Reconnect
 - Kurze Invite-Links und QR-Codes
 - Lokale Chat-Historie im Browser
-- Reconnect fuer bekannte Chats
+- Reconnect für bekannte Chats
 - Ausstehende Textnachrichten werden nach einem verifizierten Reconnect erneut gesendet
-- Mehrere Chat-Verlaeufe
-- V2-Gruppenchats als paarweise verschluesseltes Mesh
-- Dateiuebertragung mit verschluesselten Metadaten, Chunks, Fortschritt und Vorschau
-- Nachrichten bearbeiten oder fuer alle loeschen
-- Nachrichten oder ganze Chats nur lokal aus dem eigenen Browser loeschen
-- Vollstaendiger lokaler Reset aller App-Daten
+- Mehrere Chat-Verläufe
+- V2-Gruppenchats als paarweise verschlüsseltes Mesh
+- Dateiübertragung mit verschlüsselten Metadaten, Chunks, Fortschritt und Vorschau
+- Nachrichten bearbeiten oder für alle löschen
+- Nachrichten oder ganze Chats nur lokal aus dem eigenen Browser löschen
+- Vollständiger lokaler Reset aller App-Daten
 
 ## Sicherheitsmodell
 
-Der Server ist nur Komfort-Infrastruktur fuer Discovery und WebRTC-Signaling. Er soll als potenziell nicht vertrauenswuerdig betrachtet werden.
+Der Server ist nur Komfort-Infrastruktur für Discovery und WebRTC-Signaling. Er soll als potenziell nicht vertraünswürdig betrachtet werden.
 
 Der Server sieht:
 
@@ -38,24 +38,24 @@ Der Server sieht nicht:
 - WebRTC Session Keys
 - SAS-Verifizierungscodes als Geheimnis
 
-Jeder Browser erzeugt einen persistenten Identity Signing Key. Jede Verbindung erzeugt frische Session Keys. Nachrichten-Payloads werden senderseitig signiert und anschliessend fuer die jeweilige Peer-Session verschluesselt. Bei Gruppenchats sendet die App V2-Nachrichten paarweise an alle verifizierten Peer-Sessions.
+Jeder Browser erzeugt einen persistenten Identity Signing Key. Jede Verbindung erzeugt frische Session Keys. Nachrichten-Payloads werden senderseitig signiert und anschliessend für die jeweilige Peer-Session verschlüsselt. Bei Gruppenchats sendet die App V2-Nachrichten paarweise an alle verifizierten Peer-Sessions.
 
 ## Gruppenchats
 
-Ein Gruppenchat entsteht, indem derselbe Invite-Link oder QR-Code mit mehreren Geraeten geteilt wird. Jedes beitretende Geraet baut eine eigene WebRTC-Session zu den anderen Teilnehmern auf. Die App zeigt pro verbundenem Geraet einen Sicherheitscode an. Nachrichten und Dateien werden danach an die verifizierten Peer-Sessions verteilt.
+Ein Gruppenchat entsteht, indem derselbe Invite-Link oder QR-Code mit mehreren Geräten geteilt wird. Jedes beitretende Gerät baut eine eigene WebRTC-Session zu den anderen Teilnehmern auf. Die App zeigt pro verbundenem Gerät einen Sicherheitscode an. Nachrichten und Dateien werden danach an die verifizierten Peer-Sessions verteilt.
 
 Das aktuelle Gruppenmodell ist bewusst einfach und robust:
 
-- kein Klartext ueber den Server
-- keine Gruppenschluessel auf dem Server
-- pro Peer eigene Verschluesselung
+- kein Klartext über den Server
+- keine Gruppenschlüssel auf dem Server
+- pro Peer eigene Verschlüsselung
 - senderseitig signierte Chat-Payloads
 
-Ein spaeteres V3 kann echte Gruppen-Schluessel, Sender Keys oder MLS-aehnliche Mechaniken ergaenzen.
+Ein späteres V3 kann echte Gruppen-Schlüssel, Sender Keys oder MLS-ähnliche Mechaniken ergänzen.
 
 ## Signaling
 
-Standardmaessig nutzt die App den Signaling-Server:
+Standardmäßig nutzt die App den Signaling-Server:
 
 ```text
 https://signaling.p2p.di0n.de
@@ -68,11 +68,11 @@ Die mitgelieferte Cloudflare-Worker-Komponente liegt in `cloudflare-signaling/`.
 - Raum-ID
 - aktive WebSocket-Clients
 - kurzlebige WebRTC-Signaling-Nachrichten
-- Inaktivitaetsablauf per Durable-Object-Alarm
+- Inaktivitätsablauf per Durable-Object-Alarm
 
 ## Hosting
 
-Die App ist bereits auf [p2p.di0n.de](https://p2p.di0n.de) gehostet. Wer trotzdem eine eigene Instanz hosten moechte, braucht nur die statischen Dateien aus `public/`.
+Die App ist bereits auf [p2p.di0n.de](https://p2p.di0n.de) gehostet. Wer trotzdem eine eigene Instanz hosten möchte, braucht nur die statischen Dateien aus `public/`.
 
 Geeignete Hosts sind zum Beispiel:
 
@@ -82,9 +82,9 @@ Geeignete Hosts sind zum Beispiel:
 - Netlify
 - klassische Webspaces mit HTTPS
 
-Wichtig: Nicht den kompletten Repository-Root als Webroot veroeffentlichen. Oeffentlich benoetigt wird nur `public/`.
+Wichtig: Nicht den kompletten Repository-Root als Webroot veröffentlichen. öffentlich benötigt wird nur `public/`.
 
-Fuer Cloudflare Workers Static Assets liegt im Repository-Root eine `wrangler.jsonc`, die nur `./public` deployed und kurze Invite-Routen ueber `assets.not_found_handling = "single-page-application"` auf die App routet.
+Für Cloudflare Workers Static Assets liegt im Repository-Root eine `wrangler.jsonc`, die nur `./public` deployed und kurze Invite-Routen über `assets.not_found_handling = "single-page-application"` auf die App routet.
 
 ## Projektstruktur
 
@@ -106,17 +106,17 @@ cloudflare-signaling/
 
 ## Datenschutz
 
-Chats, bekannte Geraete, Pending-Outbox, gesehene Nachrichten-IDs und Identity Keys werden lokal im Browser gespeichert. Mit dem Button "App-Daten loeschen" kann der lokale Zustand inklusive gespeicherter Chats, Geraetename, Service-Worker-Cache, Browser-Speicher und Verschluesselungs-Keys geloescht werden.
+Chats, bekannte Geräte, Pending-Outbox, gesehene Nachrichten-IDs und Identity Keys werden lokal im Browser gespeichert. Mit dem Button "App-Daten löschen" kann der lokale Zustand inklusive gespeicherter Chats, Gerätename, Service-Worker-Cache, Browser-Speicher und Verschlüsselungs-Keys gelöscht werden.
 
 ## Roadmap
 
-- Feineres Trust-UI fuer Gruppenmitglieder
-- Bessere per-Empfaenger-Zustellbestaetigungen in Gruppenchats
-- Optionaler HTTP-Polling-Fallback fuer Signaling
-- Optionaler Relay-Modus fuer sehr restriktive Netzwerke, weiterhin mit E2E-Payloads
-- Wiki-Seiten fuer Setup, Sicherheit, Signaling und Troubleshooting
+- Feineres Trust-UI für Gruppenmitglieder
+- Bessere per-Empfänger-Zustellbestätigungen in Gruppenchats
+- Optionaler HTTP-Polling-Fallback für Signaling
+- Optionaler Relay-Modus für sehr restriktive Netzwerke, weiterhin mit E2E-Payloads
+- Wiki-Seiten für Setup, Sicherheit, Signaling und Troubleshooting
 - GitHub Releases, sobald die App als stabiler Release-Kandidat markiert wird
 
 ## Lizenz und Vendor-Dateien
 
-Die App nutzt vendored Browser-Bibliotheken fuer QR-Codes, QR-Scanning und Kompression. Details stehen in den jeweiligen Dateien unter `public/src/vendor/`.
+Die App nutzt vendored Browser-Bibliotheken für QR-Codes, QR-Scanning und Kompression. Details stehen in den jeweiligen Dateien unter `public/src/vendor/`.
